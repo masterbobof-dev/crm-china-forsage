@@ -256,6 +256,7 @@ export interface Purchase {
   declaredValue?: number;
   shippingCost?: number;
   status: 'purchased' | 'shipped_by_seller' | 'arrived_china' | 'at_china_warehouse' | 'shipped_to_ua' | 'arrived_ua' | 'local_delivery' | 'my_warehouse' | 'sold';
+  barcode?: string;
   arrivalDate?: string;
   batchId?: string;
   localDeliveryId?: string;
@@ -266,7 +267,6 @@ export interface Purchase {
   soldDate?: string;
   markup?: boolean;
   markupValue?: number;
-  barcode?: string;
   saleDestination?: 'physical_store' | 'online_store' | 'personal_use';
   createdAt: string;
   brand?: string;
@@ -528,6 +528,7 @@ export default function App() {
       priceYuan: item.priceYuan || 0,
       quantity: item.quantity || 1,
       sellingPrice: item.sellingPrice || 0,
+      barcode: item.barcode || '',
       exchangeRate: 5.5,
       trackNumber: '',
       photo: '',
@@ -798,7 +799,8 @@ export default function App() {
     brand: '',
     radius: '',
     season: '',
-    article: ''
+    article: '',
+    barcode: ''
   });
   const [showSaleModal, setShowSaleModal] = useState<{show: boolean, purchaseId: string | null}>({ show: false, purchaseId: null });
   const [saleForm, setSaleForm] = useState({
@@ -1648,7 +1650,8 @@ export default function App() {
       brand: '',
       radius: '',
       season: '',
-      article: ''
+      article: '',
+      barcode: ''
     });
     setEditingPurchaseId(null);
     setShowAddPurchaseModal(true);
@@ -1683,7 +1686,8 @@ export default function App() {
       brand: purchase.brand || '',
       radius: purchase.radius || '',
       season: purchase.season || '',
-      article: purchase.article || ''
+      article: purchase.article || '',
+      barcode: purchase.barcode || ''
     });
     setEditingPurchaseId(purchase.id);
     setShowAddPurchaseModal(true);
@@ -1863,7 +1867,8 @@ export default function App() {
         brand: '',
         radius: '',
         season: '',
-        article: ''
+        article: '',
+        barcode: ''
       });
     } else {
       setShowAddPurchaseModal(false);
@@ -1895,7 +1900,8 @@ export default function App() {
         brand: '',
         radius: '',
         season: '',
-        article: ''
+        article: '',
+        barcode: ''
       });
     }
   };
@@ -3179,6 +3185,7 @@ export default function App() {
                                   </button>
                                 </th>
                                 <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Товар</th>
+                                <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Штрих-код</th>
                                 <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Платформа</th>
                                 <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Трек-номер</th>
                                 <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Ціна (¥/₴)</th>
@@ -3217,6 +3224,11 @@ export default function App() {
                                           {p.link && <a href={p.link} target="_blank" rel="noreferrer" className="text-[10px] text-blue-500 hover:underline">Посилання</a>}
                                         </div>
                                       </div>
+                                    </td>
+                                    <td className="py-4 px-4">
+                                      <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest bg-gray-100 px-2 py-0.5 rounded">
+                                        {p.barcode || '—'}
+                                      </span>
                                     </td>
                                     <td className="py-4 px-4">
                                       <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest bg-gray-100 px-2 py-0.5 rounded">
@@ -5551,7 +5563,9 @@ export default function App() {
                 <button 
                   onClick={() => {
                     const trackPurchases = purchases.filter(p => p.trackNumber === selectedTrackNumber);
-                    exportToExcelWithPhotos(trackPurchases, `Track_${selectedTrackNumber}`);
+                    const productItems = trackPurchases.filter(p => !p.isWaybillHeader);
+                    const itemsToExport = productItems.length > 0 ? productItems : trackPurchases;
+                    exportToExcelWithPhotos(itemsToExport, `Track_${selectedTrackNumber}`);
                   }}
                   className="bg-emerald-500 text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 transition-all shadow-lg shadow-emerald-100 flex items-center gap-2"
                   title="Експорт в Excel"
@@ -5592,31 +5606,39 @@ export default function App() {
               <div className={cn(isExportingPDF ? "space-y-6" : "space-y-4 print:space-y-6")}>
                 {(() => {
                   const trackPurchases = purchases.filter(p => p.trackNumber === selectedTrackNumber);
+                  const productItems = trackPurchases.filter(p => !p.isWaybillHeader);
+                  const itemsToDisplay = productItems.length > 0 ? productItems : trackPurchases;
+                  
                   let totalDeliveryForGroup = 0;
                   let totalWeightForGroup = 0;
                   
+                  // Calculate total delivery from ALL items (including headers)
                   trackPurchases.forEach(p => {
                     const deliveryChinaUah = (p.deliveryCostPerItem || 0) * usdToUah; 
                     const deliveryIntUah = (p.shippingCost || 0) * usdToUah; 
                     const deliveryUAUah = (p.ukraineDeliveryCost || 0); 
                     const deliveryNPUah = (p.novaPoshtaCost || 0) + getLocalDeliveryCost(p); 
                     totalDeliveryForGroup += deliveryChinaUah + deliveryIntUah + deliveryUAUah + deliveryNPUah;
+                  });
+
+                  // Calculate total weight only from products to avoid double counting if header also has weight
+                  productItems.forEach(p => {
                     const actualWeight = p.weightUnit === 'g' ? (p.weight || 0) / 1000 : (p.weight || 0);
                     totalWeightForGroup += actualWeight;
                   });
 
-                  return trackPurchases.map(p => {
+                  return itemsToDisplay.map(p => {
                     const costPriceYuan = p.priceYuan * p.quantity;
                     const costPriceUah = costPriceYuan * p.exchangeRate;
                     const actualWeight = p.weightUnit === 'g' ? (p.weight || 0) / 1000 : (p.weight || 0);
                     
                     let itemDeliveryUah = 0;
-                    if (trackPurchases.length === 1) {
+                    if (itemsToDisplay.length === 1) {
                       itemDeliveryUah = totalDeliveryForGroup;
                     } else if (totalWeightForGroup > 0) {
                       itemDeliveryUah = totalDeliveryForGroup * (actualWeight / totalWeightForGroup);
                     } else {
-                      itemDeliveryUah = totalDeliveryForGroup / trackPurchases.length;
+                      itemDeliveryUah = totalDeliveryForGroup / itemsToDisplay.length;
                     }
 
                     const totalCostUah = costPriceUah + itemDeliveryUah;
@@ -5790,7 +5812,8 @@ export default function App() {
                       brand: '',
                       radius: '',
                       season: '',
-                      article: ''
+                      article: '',
+                      barcode: ''
                     });
                     setShowAddPurchaseModal(true);
                   }
@@ -5859,7 +5882,8 @@ export default function App() {
                 brand: '',
                 radius: '',
                 season: '',
-                article: ''
+                article: '',
+                barcode: ''
               });
             }} className="absolute top-4 right-4 md:top-6 md:right-6 text-gray-400 hover:text-black transition-colors">
               <X className="w-5 h-5 md:w-6 md:h-6" />
@@ -6310,6 +6334,17 @@ export default function App() {
                   value={purchaseForm.trackNumber || ''}
                   onChange={(e) => handleTrackNumberChange(e.target.value)}
                   placeholder="TB123456789" 
+                  className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black transition-all"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Штрих-код</label>
+                <input 
+                  type="text" 
+                  value={purchaseForm.barcode || ''}
+                  onChange={(e) => setPurchaseForm({...purchaseForm, barcode: e.target.value})}
+                  placeholder="Введіть штрих-код" 
                   className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black transition-all"
                 />
               </div>

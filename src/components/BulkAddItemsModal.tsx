@@ -25,7 +25,8 @@ export const BulkAddItemsModal: React.FC<BulkAddItemsModalProps> = ({ show, onCl
       quantity: null,
       sellingPrice: null,
       platform: null,
-      link: null
+      link: null,
+      barcode: null
     };
   });
 
@@ -86,7 +87,8 @@ export const BulkAddItemsModal: React.FC<BulkAddItemsModalProps> = ({ show, onCl
         quantity: columnMapping.quantity !== null ? parseInt(row[columnMapping.quantity]) || 0 : 0,
         sellingPrice: columnMapping.sellingPrice !== null ? parseFloat(row[columnMapping.sellingPrice]) || 0 : 0,
         platform: columnMapping.platform !== null ? String(row[columnMapping.platform] || '') : '',
-        link: columnMapping.link !== null ? String(row[columnMapping.link] || '') : ''
+        link: columnMapping.link !== null ? String(row[columnMapping.link] || '') : '',
+        barcode: columnMapping.barcode !== null ? String(row[columnMapping.barcode] || '') : ''
       };
     }).filter(item => item.name);
     console.log('Processed new items:', newItems);
@@ -102,7 +104,8 @@ export const BulkAddItemsModal: React.FC<BulkAddItemsModalProps> = ({ show, onCl
     { key: 'quantity', label: 'К-сть' },
     { key: 'sellingPrice', label: 'Ціна 1 шт (грн)' },
     { key: 'platform', label: 'Сайт/Опис' },
-    { key: 'link', label: 'Посилання на товар' }
+    { key: 'link', label: 'Посилання на товар' },
+    { key: 'barcode', label: 'Штрих-код' }
   ];
 
   const handleMappingChange = (colIndex: number, value: string) => {
@@ -250,6 +253,7 @@ export const BulkAddItemsModal: React.FC<BulkAddItemsModalProps> = ({ show, onCl
                     <th className="p-4 text-[10px] font-black text-gray-500 uppercase tracking-widest">Ціна 1 шт (грн)</th>
                     <th className="p-4 text-[10px] font-black text-gray-500 uppercase tracking-widest">Сайт/Опис</th>
                     <th className="p-4 text-[10px] font-black text-gray-500 uppercase tracking-widest">Посилання</th>
+                    <th className="p-4 text-[10px] font-black text-gray-500 uppercase tracking-widest">Штрих-код</th>
                     <th className="p-4"></th>
                   </tr>
                 </thead>
@@ -305,6 +309,15 @@ export const BulkAddItemsModal: React.FC<BulkAddItemsModalProps> = ({ show, onCl
                           onChange={(e) => updateItem(index + 1, 'link', e.target.value)}
                           className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm font-bold text-gray-900 focus:border-yellow-400 outline-none shadow-sm"
                           placeholder="Посилання"
+                        />
+                      </td>
+                      <td className="p-4">
+                        <input
+                          type="text"
+                          value={item.barcode || ''}
+                          onChange={(e) => updateItem(index + 1, 'barcode', e.target.value)}
+                          className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm font-bold text-gray-900 focus:border-yellow-400 outline-none shadow-sm"
+                          placeholder="Штрих-код"
                         />
                       </td>
                       <td className="p-4 text-right">
