@@ -6,6 +6,10 @@ export const toSnakeCase = (obj: any): any => {
     return obj.map(v => toSnakeCase(v));
   } else if (obj !== null && obj.constructor === Object) {
     return Object.keys(obj).reduce((result, key) => {
+      // Exclude UI-only properties that are not in the database schema
+      if (key === 'isWaybillHeader') {
+        return result;
+      }
       const snakeKey = key.replace(/([A-Z])/g, "_$1").toLowerCase();
       result[snakeKey] = toSnakeCase(obj[key]);
       return result;

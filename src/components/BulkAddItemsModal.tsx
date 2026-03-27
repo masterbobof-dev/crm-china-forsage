@@ -169,7 +169,7 @@ export const BulkAddItemsModal: React.FC<BulkAddItemsModalProps> = ({ show, onCl
                 <input 
                   type="number" 
                   min="1"
-                  value={startRow}
+                  value={startRow || 1}
                   onChange={(e) => setStartRow(Math.max(1, parseInt(e.target.value) || 1))}
                   className="w-20 bg-white border border-gray-200 text-gray-900 rounded-lg px-3 py-2 text-sm font-bold focus:outline-none focus:border-yellow-400 shadow-sm"
                 />

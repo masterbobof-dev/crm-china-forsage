@@ -40,6 +40,8 @@ import {
   LayoutDashboard,
   Search,
   Plus,
+  LayoutGrid,
+  List,
   Clock,
   Flag,
   X,
@@ -59,8 +61,6 @@ import {
   Receipt,
   UserCircle,
   Printer,
-  LayoutGrid,
-  List,
   Store,
   RotateCcw,
   Settings,
@@ -273,6 +273,7 @@ export interface Purchase {
   radius?: string;
   season?: string;
   article?: string;
+  isWaybillHeader?: boolean;
 }
 
 interface LocalDeliveryGroup {
@@ -390,7 +391,7 @@ const CropModal = ({ image, onCropComplete, onCancel }: { image: string, onCropC
             <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Зум</span>
             <input
               type="range"
-              value={zoom}
+              value={zoom || 1}
               min={1}
               max={3}
               step={0.1}
@@ -599,6 +600,12 @@ export default function App() {
     isPressed: false,
     tariffId: 'turbo-sea'
   });
+  const [waybillViewMode, setWaybillViewMode] = useState<'list' | 'grid'>(() => (localStorage.getItem('waybillViewMode') as 'list' | 'grid') || 'list');
+
+  useEffect(() => {
+    localStorage.setItem('waybillViewMode', waybillViewMode);
+  }, [waybillViewMode]);
+
   const [purchases, setPurchases, loadingPurchases] = useSupabaseSync<Purchase>('purchases', []);
   const [showTariffModal, setShowTariffModal] = useState<{show: boolean, tariffId: string | null}>({ show: false, tariffId: null });
   const [tariffForm, setTariffForm] = useState<Partial<Tariff>>({
@@ -634,15 +641,17 @@ export default function App() {
   const [novaPoshtaApiKey, setNovaPoshtaApiKey] = useState(() => localStorage.getItem('novaPoshtaApiKey') || '');
   const [priceListMargin, setPriceListMargin] = useState(() => parseFloat(localStorage.getItem('priceListMargin') || '0'));
 
-  const handleBulkDelete = async (ids: string[]) => {
-    const { error } = await supabase.from('purchases').delete().in('id', ids);
-    if (error) {
-      addNotification('Помилка при видаленні: ' + error.message, 'error');
-    } else {
-      addNotification('Товари успішно видалені', 'success');
-      setPurchases(purchases.filter(p => !ids.includes(p.id)));
-      setSelectedPurchaseIds([]);
-    }
+  const handleBulkDelete = (ids: string[]) => {
+    setConfirmModal({
+      show: true,
+      title: 'Підтвердження видалення',
+      message: `Ви впевнені, що хочете видалити ${ids.length} вибраних товарів? Цю дію неможливо скасувати.`,
+      onConfirm: () => {
+        setPurchases(purchases.filter(p => !ids.includes(p.id)));
+        setSelectedPurchaseIds([]);
+        addNotification('Товари успішно видалені', 'success');
+      }
+    });
   };
 
   useEffect(() => {
@@ -806,6 +815,7 @@ export default function App() {
   const [showStorePreview, setShowStorePreview] = useState(false);
   const [shippingPricePerKg, setShippingPricePerKg] = useState(12);
   const [selectedPurchaseIds, setSelectedPurchaseIds] = useState<string[]>([]);
+  const [selectedWaybillTracks, setSelectedWaybillTracks] = useState<string[]>([]);
 
   const [showImportWaybillModal, setShowImportWaybillModal] = useState(false);
   const [waybillImportText, setWaybillImportText] = useState('');
@@ -845,11 +855,11 @@ export default function App() {
 
       const newPurchase: Purchase = {
         id: Math.random().toString(36).substr(2, 9),
-        name: `Товар з накладної ${trackNumber}`,
-        platform: 'Pinduoduo',
+        name: `Накладна ${trackNumber}`,
+        platform: 'Waybill',
         link: '',
         priceYuan: 0,
-        quantity: 1,
+        quantity: 0,
         exchangeRate: cnyToUah,
         trackNumber: trackNumber,
         photo: '',
@@ -862,6 +872,7 @@ export default function App() {
         arrivalDate: arrivalDate,
         deliveryCostPerItem: shippingCost,
         shippingCost: shippingCost,
+        isWaybillHeader: true,
       };
       
       newPurchases.push(newPurchase);
@@ -895,15 +906,28 @@ export default function App() {
           totalWeight: 0,
           totalCostYuan: 0,
           totalDeliveryCost: 0,
-          arrivalDate: p.arrivalDate || '',
-          status: p.status
+          arrivalDate: '',
+          status: p.status,
+          hasHeader: false
         };
       }
-      acc[track].items.push(p);
-      acc[track].totalQuantity += p.quantity;
-      acc[track].totalWeight += p.weight || 0;
-      acc[track].totalCostYuan += (p.priceYuan * p.quantity);
-      acc[track].totalDeliveryCost += (p.shippingCost || 0);
+      
+      if (p.isWaybillHeader) {
+        acc[track].totalWeight = p.weight || 0;
+        acc[track].totalDeliveryCost = p.shippingCost || 0;
+        acc[track].arrivalDate = p.arrivalDate || '';
+        acc[track].hasHeader = true;
+      } else {
+        acc[track].items.push(p);
+        acc[track].totalQuantity += p.quantity;
+        acc[track].totalCostYuan += (p.priceYuan * p.quantity);
+        // If no header, we sum up item weights as fallback
+        if (!acc[track].hasHeader) {
+          acc[track].totalWeight += p.weight || 0;
+          acc[track].totalDeliveryCost += (p.shippingCost || 0);
+          if (p.arrivalDate) acc[track].arrivalDate = p.arrivalDate;
+        }
+      }
       return acc;
     }, {} as Record<string, any>);
 
@@ -1327,13 +1351,46 @@ export default function App() {
   };
 
   const handleBulkStatusChange = (newStatus: Purchase['status']) => {
-    if (confirm(`Ви впевнені, що хочете змінити статус для ${selectedPurchaseIds.length} товарів на "${statusLabels[newStatus]}"?`)) {
-      setPurchases(purchases.map(p => 
-        selectedPurchaseIds.includes(p.id) ? { ...p, status: newStatus } : p
-      ));
-      setSelectedPurchaseIds([]);
-      addNotification(`Статус успішно змінено для ${selectedPurchaseIds.length} товарів`, 'success');
-    }
+    setConfirmModal({
+      show: true,
+      title: 'Зміна статусу',
+      message: `Ви впевнені, що хочете змінити статус для ${selectedPurchaseIds.length} товарів на "${statusLabels[newStatus]}"?`,
+      onConfirm: () => {
+        setPurchases(purchases.map(p => 
+          selectedPurchaseIds.includes(p.id) ? { ...p, status: newStatus } : p
+        ));
+        setSelectedPurchaseIds([]);
+        addNotification(`Статус успішно змінено для ${selectedPurchaseIds.length} товарів`, 'success');
+      }
+    });
+  };
+
+  const handleBulkStatusChangeWaybills = (newStatus: Purchase['status']) => {
+    setConfirmModal({
+      show: true,
+      title: 'Зміна статусу накладних',
+      message: `Ви впевнені, що хочете змінити статус для ${selectedWaybillTracks.length} накладних на "${statusLabels[newStatus]}"?`,
+      onConfirm: () => {
+        setPurchases(prev => prev.map(p => 
+          selectedWaybillTracks.includes(p.trackNumber || '') ? { ...p, status: newStatus } : p
+        ));
+        setSelectedWaybillTracks([]);
+        addNotification(`Статус успішно змінено для ${selectedWaybillTracks.length} накладних`, 'success');
+      }
+    });
+  };
+
+  const handleBulkDeleteWaybills = () => {
+    setConfirmModal({
+      show: true,
+      title: 'Видалення накладних',
+      message: `Ви впевнені, що хочете видалити ${selectedWaybillTracks.length} накладних? Всі товари в них будуть видалені.`,
+      onConfirm: () => {
+        setPurchases(prev => prev.filter(p => !selectedWaybillTracks.includes(p.trackNumber || '')));
+        setSelectedWaybillTracks([]);
+        addNotification(`Видалено ${selectedWaybillTracks.length} накладних`, 'success');
+      }
+    });
   };
 
   const copyToClipboard = (text: string) => {
@@ -1404,20 +1461,25 @@ export default function App() {
   };
 
   const handleDeleteSale = (id: string) => {
-    if (confirm('Ви впевнені, що хочете видалити цей продаж? Товар повернеться на "Прибуло на мій склад".')) {
-      setPurchases(purchases.map(p => p.id === id ? { 
-        ...p, 
-        status: 'my_warehouse', 
-        sellingPrice: undefined, 
-        soldDate: undefined,
-        markup: undefined,
-        markupValue: undefined,
-        saleDestination: undefined,
-        novaPoshtaCost: undefined,
-        ukraineDeliveryCost: undefined
-      } : p));
-      addNotification('Продаж скасовано', 'info');
-    }
+    setConfirmModal({
+      show: true,
+      title: 'Видалити продаж?',
+      message: 'Ви впевнені, що хочете видалити цей продаж? Товар повернеться на "Прибуло на мій склад".',
+      onConfirm: () => {
+        setPurchases(purchases.map(p => p.id === id ? { 
+          ...p, 
+          status: 'my_warehouse', 
+          sellingPrice: undefined, 
+          soldDate: undefined,
+          markup: undefined,
+          markupValue: undefined,
+          saleDestination: undefined,
+          novaPoshtaCost: undefined,
+          ukraineDeliveryCost: undefined
+        } : p));
+        addNotification('Продаж скасовано', 'info');
+      }
+    });
   };
 
   const handleEditSale = (p: Purchase) => {
@@ -2464,7 +2526,7 @@ export default function App() {
                 <div className="space-y-4">
                   <label className="text-[11px] font-black text-gray-400 uppercase tracking-[0.2em]">Напрямок</label>
                   <select 
-                    value={npData.destination}
+                    value={npData.destination || 'city'}
                     onChange={(e) => setNpData(p => ({ ...p, destination: e.target.value as any }))}
                     className="w-full bg-gray-50 border-2 border-gray-100 rounded-xl px-6 py-4 font-black text-lg appearance-none"
                   >
@@ -2809,7 +2871,7 @@ export default function App() {
                   <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">Роль:</span>
                 </div>
                 <select 
-                  value={userRole}
+                  value={userRole || 'admin'}
                   onChange={(e) => setUserRole(e.target.value as UserRole)}
                   className="text-xs font-black text-black bg-gray-50 px-3 py-1.5 rounded-lg border-none focus:ring-2 focus:ring-yellow-400 cursor-pointer outline-none"
                 >
@@ -2855,7 +2917,7 @@ export default function App() {
                   <input 
                     type="text" 
                     placeholder="Трек-номер..."
-                    value={purchaseSearch}
+                    value={purchaseSearch || ''}
                     onChange={(e) => {
                       setPurchaseSearch(e.target.value);
                       if (crmModule !== 'purchases') setCrmModule('purchases');
@@ -3055,7 +3117,7 @@ export default function App() {
                           <div className="relative flex-1 lg:flex-none min-w-[200px]">
                             <input 
                               type="text" 
-                              value={purchaseSearch}
+                              value={purchaseSearch || ''}
                               onChange={(e) => setPurchaseSearch(e.target.value)}
                               placeholder="Пошук..." 
                               className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-black transition-all"
@@ -3063,7 +3125,7 @@ export default function App() {
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                           </div>
                           <select 
-                            value={statusFilter}
+                            value={statusFilter || 'all'}
                             onChange={(e) => setStatusFilter(e.target.value)}
                             className="px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-xs font-black uppercase tracking-widest outline-none focus:ring-2 focus:ring-black cursor-pointer"
                           >
@@ -3072,7 +3134,7 @@ export default function App() {
                           </select>
                           <button 
                             onClick={() => setShowBulkAddModal(true)}
-                            className="bg-gray-800 text-white px-8 py-5 rounded-2xl font-black uppercase tracking-widest text-xs flex items-center gap-3 hover:bg-gray-900 transition-all shadow-lg shadow-gray-100 whitespace-nowrap"
+                            className="bg-green-600 text-white px-8 py-5 rounded-2xl font-black uppercase tracking-widest text-xs flex items-center gap-3 hover:bg-green-700 transition-all shadow-lg shadow-green-100 whitespace-nowrap"
                           >
                             <Plus className="w-5 h-5" />
                             Нова закупка
@@ -3087,11 +3149,7 @@ export default function App() {
                                 Призначити накладну ({selectedPurchaseIds.length})
                               </button>
                               <button 
-                                onClick={() => {
-                                  if (confirm(`Ви впевнені, що хочете видалити ${selectedPurchaseIds.length} вибраних товарів?`)) {
-                                    handleBulkDelete(selectedPurchaseIds);
-                                  }
-                                }}
+                                onClick={() => handleBulkDelete(selectedPurchaseIds)}
                                 className="bg-red-500 text-white px-8 py-5 rounded-2xl font-black uppercase tracking-widest text-xs flex items-center gap-3 hover:bg-red-600 transition-all shadow-lg shadow-red-100 whitespace-nowrap"
                               >
                                 <Trash2 className="w-5 h-5" />
@@ -3123,9 +3181,9 @@ export default function App() {
                                 <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Товар</th>
                                 <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Платформа</th>
                                 <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Трек-номер</th>
-                                <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Ціна (¥)</th>
+                                <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Ціна (¥/₴)</th>
                                 <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">К-сть</th>
-                                <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Разом (¥)</th>
+                                <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Разом (¥/₴)</th>
                                 <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Дії</th>
                               </tr>
                             </thead>
@@ -3190,9 +3248,15 @@ export default function App() {
                                         </datalist>
                                       </div>
                                     </td>
-                                    <td className="py-4 px-4 text-sm font-bold text-gray-600">{p.priceYuan} ¥</td>
+                                    <td className="py-4 px-4 text-sm font-bold text-gray-600">
+                                      <div>{p.priceYuan} ¥</div>
+                                      <div className="text-[10px] text-gray-400">₴{(p.priceYuan * p.exchangeRate).toFixed(2)}</div>
+                                    </td>
                                     <td className="py-4 px-4 text-sm font-bold text-gray-600">{p.quantity}</td>
-                                    <td className="py-4 px-4 text-sm font-black text-black">{(p.priceYuan * p.quantity).toFixed(2)} ¥</td>
+                                    <td className="py-4 px-4 text-sm font-black text-black">
+                                      <div>{(p.priceYuan * p.quantity).toFixed(2)} ¥</div>
+                                      <div className="text-[10px] text-gray-400 font-bold">₴{(p.priceYuan * p.quantity * p.exchangeRate).toFixed(2)}</div>
+                                    </td>
                                     <td className="py-4 px-4">
                                       <div className="flex items-center gap-2">
                                         <button 
@@ -3229,12 +3293,51 @@ export default function App() {
                   ) : crmModule === 'china_warehouse' ? (
                     <div className="space-y-8">
                       <div className="flex justify-between items-center">
-                        <h2 className="text-2xl font-black text-black uppercase tracking-tight">Накладні на складі Китай</h2>
+                        <div className="flex items-center gap-6">
+                          <div className="flex items-center gap-4">
+                            <input 
+                              type="checkbox"
+                              checked={selectedWaybillTracks.length === waybills.length && waybills.length > 0}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedWaybillTracks(waybills.map((w: any) => w.trackNumber));
+                                } else {
+                                  setSelectedWaybillTracks([]);
+                                }
+                              }}
+                              className="w-5 h-5 rounded border-gray-300 text-black focus:ring-black cursor-pointer"
+                            />
+                            <h2 className="text-2xl font-black text-black uppercase tracking-tight">Накладні на складі Китай</h2>
+                          </div>
+                          
+                          <div className="flex bg-gray-100 p-1 rounded-xl">
+                            <button 
+                              onClick={() => setWaybillViewMode('list')}
+                              className={cn(
+                                "p-2 rounded-lg transition-all",
+                                waybillViewMode === 'list' ? "bg-white shadow-sm text-black" : "text-gray-400 hover:text-gray-600"
+                              )}
+                              title="Список"
+                            >
+                              <List className="w-4 h-4" />
+                            </button>
+                            <button 
+                              onClick={() => setWaybillViewMode('grid')}
+                              className={cn(
+                                "p-2 rounded-lg transition-all",
+                                waybillViewMode === 'grid' ? "bg-white shadow-sm text-black" : "text-gray-400 hover:text-gray-600"
+                              )}
+                              title="Галерея"
+                            >
+                              <LayoutGrid className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
                         <div className="flex gap-4">
                           <div className="relative">
                             <input 
                               type="text" 
-                              value={chinaWarehouseSearch}
+                              value={chinaWarehouseSearch || ''}
                               onChange={(e) => setChinaWarehouseSearch(e.target.value)}
                               placeholder="Пошук за треком..." 
                               className="pl-10 pr-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-black transition-all"
@@ -3263,111 +3366,152 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-1 gap-6">
+                      <div className={cn(
+                        "grid gap-6",
+                        waybillViewMode === 'grid' ? "grid-cols-1 md:grid-cols-2 xl:grid-cols-3" : "grid-cols-1"
+                      )}>
                         {waybills.length > 0 ? (
                           waybills.map((w: any) => (
-                            <div key={w.trackNumber} className="bg-white border border-gray-100 rounded-3xl p-8 shadow-sm hover:shadow-md transition-all group">
-                              <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
-                                <div className="space-y-2">
-                                  <div className="flex items-center gap-3">
-                                    <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center">
-                                      <Receipt className="w-6 h-6 text-amber-600" />
+                            <div key={w.trackNumber} className={cn(
+                              "bg-white border rounded-3xl shadow-sm hover:shadow-md transition-all group relative overflow-hidden flex flex-col",
+                              selectedWaybillTracks.includes(w.trackNumber) ? "border-black ring-1 ring-black" : "border-gray-100",
+                              waybillViewMode === 'list' ? "p-4 md:p-5" : "p-5"
+                            )}>
+                                <div className={cn(
+                                  "flex gap-4 items-center",
+                                  waybillViewMode === 'list' ? "flex-row" : "flex-col items-start"
+                                )}>
+                                  {/* Selection & Icon */}
+                                  <div className="flex items-center gap-3 flex-shrink-0">
+                                    <input 
+                                      type="checkbox"
+                                      checked={selectedWaybillTracks.includes(w.trackNumber)}
+                                      onChange={() => {
+                                        if (selectedWaybillTracks.includes(w.trackNumber)) {
+                                          setSelectedWaybillTracks(selectedWaybillTracks.filter(t => t !== w.trackNumber));
+                                        } else {
+                                          setSelectedWaybillTracks([...selectedWaybillTracks, w.trackNumber]);
+                                        }
+                                      }}
+                                      className="w-4 h-4 rounded border-gray-300 text-black focus:ring-black cursor-pointer"
+                                    />
+                                    <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center flex-shrink-0">
+                                      <Receipt className="w-5 h-5 text-amber-600" />
                                     </div>
-                                    <div>
-                                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Трек-номер</p>
-                                      <button 
-                                        onClick={() => setSelectedTrackNumber(w.trackNumber)}
-                                        className="text-xl font-black text-black hover:text-blue-600 transition-colors flex items-center gap-2"
-                                      >
-                                        {w.trackNumber}
-                                        <ExternalLink className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
-                                      </button>
-                                    </div>
                                   </div>
-                                </div>
 
-                                <div className="grid grid-cols-2 md:grid-cols-5 gap-8 flex-1 px-0 lg:px-12">
-                                  <div>
-                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Товари</p>
-                                    <p className="text-sm font-bold text-black">{w.items.length} поз. ({w.totalQuantity} шт)</p>
+                                  {/* Track Info */}
+                                  <div className={cn("min-w-0", waybillViewMode === 'list' ? "w-48" : "w-full")}>
+                                    <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest leading-none mb-1">Трек-номер</p>
+                                    <button 
+                                      onClick={() => setSelectedTrackNumber(w.trackNumber)}
+                                      className="text-base font-black text-black hover:text-blue-600 transition-colors flex items-center gap-2 truncate"
+                                    >
+                                      {w.trackNumber}
+                                      <ExternalLink className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                    </button>
                                   </div>
-                                  <div>
-                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Вага</p>
-                                    <p className="text-sm font-bold text-black">{w.totalWeight.toFixed(2)} кг</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Вартість</p>
-                                    <p className="text-sm font-bold text-black">¥{w.totalCostYuan.toFixed(2)}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Доставка</p>
-                                    <p className="text-sm font-bold text-indigo-600">${w.totalDeliveryCost.toFixed(2)}</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Статус</p>
-                                    <span className="text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg bg-amber-50 text-amber-600">
-                                      🏬 Склад Китай
-                                    </span>
-                                  </div>
-                                </div>
 
-                                <div className="flex gap-3">
-                                  <button 
-                                    onClick={() => {
-                                      const newTrack = prompt('Введіть новий трек-номер для цієї накладної:', w.trackNumber);
-                                      if (newTrack) handleEditWaybill(w.trackNumber, newTrack);
-                                    }}
-                                    className="p-3 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl transition-colors"
-                                    title="Редагувати трек-номер"
-                                  >
-                                    <Edit2 className="w-5 h-5" />
-                                  </button>
-                                  <button 
-                                    onClick={() => {
-                                      const ids = w.items.map((i: any) => i.id);
-                                      setPurchases(purchases.map(p => ids.includes(p.id) ? { ...p, status: 'shipped_to_ua' } : p));
-                                      addNotification(`Накладну ${w.trackNumber} відправлено в Україну`, 'success');
-                                    }}
-                                    className="bg-indigo-50 text-indigo-600 px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-100 transition-colors flex items-center gap-2"
-                                  >
-                                    <Truck className="w-4 h-4" />
-                                    Відправити
-                                  </button>
-                                  <button 
-                                    onClick={() => {
-                                      if (confirm(`Ви впевнені, що хочете видалити накладну ${w.trackNumber}? Всі товари в ній будуть видалені.`)) {
-                                        const ids = w.items.map((i: any) => i.id);
-                                        handleBulkDelete(ids);
-                                      }
-                                    }}
-                                    className="p-3 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"
-                                  >
-                                    <Trash2 className="w-5 h-5" />
-                                  </button>
-                                </div>
-                              </div>
-                              
-                              <div className="mt-6 pt-6 border-t border-gray-50 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                {w.items.slice(0, 3).map((item: any) => (
-                                  <div key={item.id} className="flex items-center gap-3 bg-gray-50/50 p-3 rounded-xl border border-gray-100/50">
-                                    <div className="w-10 h-10 rounded-lg bg-white overflow-hidden flex-shrink-0 border border-gray-100">
-                                      {item.photo ? <img src={item.photo} alt={item.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : <Package className="w-5 h-5 m-2.5 text-gray-300" />}
+                                  {/* Stats Grid */}
+                                  <div className={cn(
+                                    "grid gap-4 flex-1",
+                                    waybillViewMode === 'list' ? "grid-cols-5" : "grid-cols-2 w-full mt-4 pt-4 border-t border-gray-50"
+                                  )}>
+                                    <div className="min-w-0">
+                                      <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-0.5">Товари</p>
+                                      <p className="text-xs font-bold text-black truncate">{w.items.length} поз. / {w.totalQuantity} шт</p>
                                     </div>
                                     <div className="min-w-0">
-                                      <p className="text-xs font-bold text-black truncate">{item.name}</p>
-                                      <p className="text-[10px] font-black text-gray-400 uppercase">{item.quantity} шт • ¥{item.priceYuan}</p>
+                                      <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-0.5">Вага</p>
+                                      <p className="text-xs font-bold text-black truncate">{w.totalWeight.toFixed(2)} кг</p>
+                                    </div>
+                                    <div className="min-w-0">
+                                      <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-0.5">Вартість</p>
+                                      <p className="text-xs font-bold text-black truncate">₴{(w.totalCostYuan * cnyToUah).toFixed(0)}</p>
+                                    </div>
+                                    <div className="min-w-0">
+                                      <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-0.5">Доставка</p>
+                                      <p className="text-xs font-bold text-indigo-600 truncate">₴{(w.totalDeliveryCost * usdToUah).toFixed(0)}</p>
+                                    </div>
+                                    <div className={cn("min-w-0", waybillViewMode === 'grid' && "col-span-2 mt-2")}>
+                                      <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">Статус</p>
+                                      <span className="text-[8px] font-black uppercase tracking-widest px-2 py-1 rounded-md bg-amber-50 text-amber-600 inline-block border border-amber-100">
+                                        🏬 Склад Китай
+                                      </span>
                                     </div>
                                   </div>
-                                ))}
-                                {w.items.length > 3 && (
-                                  <button 
-                                    onClick={() => setSelectedTrackNumber(w.trackNumber)}
-                                    className="flex items-center justify-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest hover:text-black transition-colors"
-                                  >
-                                    Ще {w.items.length - 3} товарів...
-                                  </button>
-                                )}
+
+                                  {/* Actions */}
+                                  <div className={cn(
+                                    "flex gap-2",
+                                    waybillViewMode === 'list' ? "ml-auto" : "w-full pt-4 border-t border-gray-50 mt-4"
+                                  )}>
+                                    <button 
+                                      onClick={() => {
+                                        const newTrack = prompt('Введіть новий трек-номер для цієї накладної:', w.trackNumber);
+                                        if (newTrack) handleEditWaybill(w.trackNumber, newTrack);
+                                      }}
+                                      className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
+                                      title="Редагувати"
+                                    >
+                                      <Edit2 className="w-4 h-4" />
+                                    </button>
+                                    <button 
+                                      onClick={() => {
+                                        const ids = w.items.map((i: any) => i.id);
+                                        setPurchases(purchases.map(p => ids.includes(p.id) ? { ...p, status: 'shipped_to_ua' } : p));
+                                        setSelectedWaybillTracks(selectedWaybillTracks.filter(t => t !== w.trackNumber));
+                                        addNotification(`Накладну ${w.trackNumber} відправлено в Україну`, 'success');
+                                      }}
+                                      className="bg-indigo-50 text-indigo-600 px-4 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest hover:bg-indigo-100 transition-colors flex items-center gap-2 flex-1 justify-center"
+                                    >
+                                      <Truck className="w-3.5 h-3.5" />
+                                      Відправити
+                                    </button>
+                                    <button 
+                                      onClick={() => {
+                                        setConfirmModal({
+                                          show: true,
+                                          title: 'Видалити накладну?',
+                                          message: `Ви впевнені, що хочете видалити накладну ${w.trackNumber}? Всі товари в ній будуть видалені.`,
+                                          onConfirm: () => {
+                                            setPurchases(prev => prev.filter(p => p.trackNumber !== w.trackNumber));
+                                            setSelectedWaybillTracks(selectedWaybillTracks.filter(t => t !== w.trackNumber));
+                                            addNotification(`Накладну ${w.trackNumber} видалено`, 'success');
+                                          }
+                                        });
+                                      }}
+                                      className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                      title="Видалити"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
                               </div>
+                              
+                              {waybillViewMode === 'grid' && (
+                                <div className="mt-4 pt-4 border-t border-gray-50 flex flex-col gap-2">
+                                  {w.items.slice(0, 2).map((item: any) => (
+                                    <div key={item.id} className="flex items-center gap-2 bg-gray-50/50 p-2 rounded-lg border border-gray-100/50">
+                                      <div className="w-8 h-8 rounded-md bg-white overflow-hidden flex-shrink-0 border border-gray-100">
+                                        {item.photo ? <img src={item.photo} alt={item.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : <Package className="w-4 h-4 m-2 text-gray-300" />}
+                                      </div>
+                                      <div className="min-w-0 flex-1">
+                                        <p className="text-[10px] font-bold text-black truncate leading-tight">{item.name}</p>
+                                        <p className="text-[9px] font-black text-gray-400 uppercase tracking-tighter">{item.quantity} шт • ¥{item.priceYuan}</p>
+                                      </div>
+                                    </div>
+                                  ))}
+                                  {w.items.length > 2 && (
+                                    <button 
+                                      onClick={() => setSelectedTrackNumber(w.trackNumber)}
+                                      className="text-[9px] font-black text-gray-400 uppercase tracking-widest hover:text-black transition-colors text-center py-1"
+                                    >
+                                      +{w.items.length - 2} товарів...
+                                    </button>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           ))
                         ) : (
@@ -3382,6 +3526,52 @@ export default function App() {
                           </div>
                         )}
                       </div>
+
+                      {selectedWaybillTracks.length > 0 && (
+                        <motion.div 
+                          initial={{ y: 100, opacity: 0 }}
+                          animate={{ y: 0, opacity: 1 }}
+                          className="fixed bottom-8 left-1/2 -translate-x-1/2 bg-black text-white px-8 py-4 rounded-3xl shadow-2xl flex items-center gap-8 z-50 border border-white/10 backdrop-blur-xl"
+                        >
+                          <div className="flex items-center gap-3 pr-8 border-r border-white/20">
+                            <div className="w-8 h-8 bg-white/10 rounded-xl flex items-center justify-center font-black text-sm">
+                              {selectedWaybillTracks.length}
+                            </div>
+                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Вибрано накладних</p>
+                          </div>
+                          
+                          <div className="flex items-center gap-4">
+                            <button 
+                              onClick={() => handleBulkStatusChangeWaybills('shipped_to_ua')}
+                              className="flex items-center gap-2 px-4 py-2 hover:bg-white/10 rounded-xl transition-colors text-[10px] font-black uppercase tracking-widest"
+                            >
+                              <Truck className="w-4 h-4" />
+                              Відправити
+                            </button>
+                            <button 
+                              onClick={() => handleBulkStatusChangeWaybills('my_warehouse')}
+                              className="flex items-center gap-2 px-4 py-2 hover:bg-white/10 rounded-xl transition-colors text-[10px] font-black uppercase tracking-widest"
+                            >
+                              <Home className="w-4 h-4" />
+                              На мій склад
+                            </button>
+                            <button 
+                              onClick={handleBulkDeleteWaybills}
+                              className="flex items-center gap-2 px-4 py-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-xl transition-colors text-[10px] font-black uppercase tracking-widest"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              Видалити
+                            </button>
+                          </div>
+                          
+                          <button 
+                            onClick={() => setSelectedWaybillTracks([])}
+                            className="p-2 hover:bg-white/10 rounded-xl transition-colors ml-4"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </motion.div>
+                      )}
                     </div>
                   ) : crmModule === 'consolidation' ? (
                     <ErrorBoundary>
@@ -3640,7 +3830,7 @@ export default function App() {
                           <div className="relative flex-1 lg:flex-none min-w-[200px]">
                             <input 
                               type="text" 
-                              value={uaWarehouseSearch}
+                              value={uaWarehouseSearch || ''}
                               onChange={(e) => setUaWarehouseSearch(e.target.value)}
                               placeholder="Пошук за треком..." 
                               className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-black transition-all"
@@ -3650,13 +3840,13 @@ export default function App() {
                           
                           <input 
                             type="date" 
-                            value={uaWarehouseDateFilter}
+                            value={uaWarehouseDateFilter || ''}
                             onChange={(e) => setUaWarehouseDateFilter(e.target.value)}
                             className="px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-xs font-black uppercase tracking-widest outline-none focus:ring-2 focus:ring-black cursor-pointer"
                           />
 
                           <select 
-                            value={uaWarehouseBatchFilter}
+                            value={uaWarehouseBatchFilter || ''}
                             onChange={(e) => setUaWarehouseBatchFilter(e.target.value)}
                             className="px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-xs font-black uppercase tracking-widest outline-none focus:ring-2 focus:ring-black cursor-pointer"
                           >
@@ -4087,7 +4277,7 @@ export default function App() {
                         <h2 className="text-2xl font-black text-black uppercase tracking-tight">Видача на магазин</h2>
                         <div className="flex gap-4">
                           <select
-                            value={salesFilter}
+                            value={salesFilter || 'all'}
                             onChange={(e) => setSalesFilter(e.target.value as any)}
                             className="px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-black transition-all"
                           >
@@ -4099,7 +4289,7 @@ export default function App() {
                           <div className="relative">
                             <input 
                               type="text" 
-                              value={salesSearch}
+                              value={salesSearch || ''}
                               onChange={(e) => setSalesSearch(e.target.value)}
                               placeholder="Пошук за назвою..." 
                               className="pl-10 pr-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-black transition-all"
@@ -4351,11 +4541,16 @@ export default function App() {
                               <span className="text-[10px] font-black uppercase tracking-widest px-2">Вибрано: {selectedPurchaseIds.length}</span>
                               <button 
                                 onClick={() => {
-                                  if (confirm(`Ви впевнені, що хочете перевести ${selectedPurchaseIds.length} товарів у статус "Прибуло в Україну"?`)) {
-                                    setPurchases(purchases.map(p => selectedPurchaseIds.includes(p.id) ? { ...p, status: 'arrived_ua' } : p));
-                                    setSelectedPurchaseIds([]);
-                                    addNotification(`Статус змінено для ${selectedPurchaseIds.length} товарів`, 'success');
-                                  }
+                                  setConfirmModal({
+                                    show: true,
+                                    title: 'Прибуття в Україну',
+                                    message: `Ви впевнені, що хочете перевести ${selectedPurchaseIds.length} товарів у статус "Прибуло в Україну"?`,
+                                    onConfirm: () => {
+                                      setPurchases(purchases.map(p => selectedPurchaseIds.includes(p.id) ? { ...p, status: 'arrived_ua' } : p));
+                                      setSelectedPurchaseIds([]);
+                                      addNotification(`Статус змінено для ${selectedPurchaseIds.length} товарів`, 'success');
+                                    }
+                                  });
                                 }}
                                 className="px-4 py-2 bg-white text-black rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-gray-200 transition-all"
                               >
@@ -4404,7 +4599,7 @@ export default function App() {
                               <input 
                                 type="text"
                                 placeholder="Пошук..."
-                                value={priceListSearch}
+                                value={priceListSearch || ''}
                                 onChange={(e) => setPriceListSearch(e.target.value)}
                                 className="pl-10 pr-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-xs font-black uppercase tracking-widest outline-none focus:ring-2 focus:ring-black w-48"
                               />
@@ -4414,7 +4609,7 @@ export default function App() {
                               <input 
                                 type="text" 
                                 placeholder="Сканер..." 
-                                value={scannerInput}
+                                value={scannerInput || ''}
                                 onChange={(e) => {
                                   setScannerInput(e.target.value);
                                   // Add scanner logic here
@@ -4450,13 +4645,13 @@ export default function App() {
                             </button>
                             <input 
                               type="date" 
-                              value={priceListDateFilter}
+                              value={priceListDateFilter || ''}
                               onChange={(e) => setPriceListDateFilter(e.target.value)}
                               className="px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-xs font-black uppercase tracking-widest outline-none focus:ring-2 focus:ring-black cursor-pointer"
                             />
 
                             <select 
-                              value={priceListBatchFilter}
+                              value={priceListBatchFilter || ''}
                               onChange={(e) => setPriceListBatchFilter(e.target.value)}
                               className="px-4 py-3 bg-gray-50 border border-gray-100 rounded-xl text-xs font-black uppercase tracking-widest outline-none focus:ring-2 focus:ring-black cursor-pointer"
                             >
@@ -4469,7 +4664,7 @@ export default function App() {
                             <div className="flex items-center gap-4 bg-white p-2 rounded-2xl shadow-sm border border-gray-100">
                               <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Націнка (%)</label>
                               <select 
-                                value={priceListMargin}
+                                value={priceListMargin || 0}
                                 onChange={(e) => setPriceListMargin(parseInt(e.target.value) || 0)}
                                 className="w-32 p-2 bg-gray-50 rounded-xl border border-gray-100 font-black text-black focus:outline-none focus:ring-2 focus:ring-black"
                               >
@@ -4488,7 +4683,7 @@ export default function App() {
                               <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-2">Курс CNY/UAH</label>
                               <input 
                                 type="number" 
-                                value={cnyToUah}
+                                value={cnyToUah || 0}
                                 onChange={(e) => setCnyToUah(parseFloat(e.target.value) || 0)}
                                 className="w-20 p-2 bg-gray-50 rounded-xl border border-gray-100 font-black text-black text-center focus:outline-none"
                               />
@@ -5176,7 +5371,7 @@ export default function App() {
                                 <input 
                                   type="number" 
                                   step="0.01"
-                                  value={cnyToUah}
+                                  value={cnyToUah || 0}
                                   onChange={(e) => setCnyToUah(parseFloat(e.target.value) || 0)}
                                   className="flex-1 p-4 bg-gray-50 rounded-xl border border-gray-100 font-black text-2xl text-black focus:outline-none focus:ring-2 focus:ring-black"
                                 />
@@ -5191,7 +5386,7 @@ export default function App() {
                                 <input 
                                   type="number" 
                                   step="0.01"
-                                  value={usdToUah}
+                                  value={usdToUah || 0}
                                   onChange={(e) => setUsdToUah(parseFloat(e.target.value) || 0)}
                                   className="flex-1 p-4 bg-gray-50 rounded-xl border border-gray-100 font-black text-2xl text-black focus:outline-none focus:ring-2 focus:ring-black"
                                 />
@@ -5302,7 +5497,7 @@ export default function App() {
                               <div className="flex items-center gap-4">
                                 <input 
                                   type="password" 
-                                  value={novaPoshtaApiKey}
+                                  value={novaPoshtaApiKey || ''}
                                   onChange={(e) => setNovaPoshtaApiKey(e.target.value)}
                                   placeholder="Введіть API ключ..."
                                   className="flex-1 p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold text-sm text-black focus:outline-none focus:ring-2 focus:ring-black"
@@ -5678,7 +5873,7 @@ export default function App() {
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Платформа / Постачальник</label>
                 <select 
-                  value={purchaseForm.platform}
+                  value={purchaseForm.platform || '1688'}
                   onChange={(e) => setPurchaseForm({...purchaseForm, platform: e.target.value})}
                   className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black"
                 >
@@ -5693,7 +5888,7 @@ export default function App() {
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Назва товару</label>
                 <input 
                   type="text" 
-                  value={purchaseForm.name}
+                  value={purchaseForm.name || ''}
                   onChange={(e) => setPurchaseForm({...purchaseForm, name: e.target.value})}
                   placeholder="Назва товару" 
                   className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black" 
@@ -5704,7 +5899,7 @@ export default function App() {
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Посилання на товар</label>
                 <input 
                   type="text" 
-                  value={purchaseForm.link}
+                  value={purchaseForm.link || ''}
                   onChange={(e) => setPurchaseForm({...purchaseForm, link: e.target.value})}
                   placeholder="https://..." 
                   className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black" 
@@ -5856,7 +6051,7 @@ export default function App() {
                         className="flex-1 p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black" 
                       />
                       <select 
-                        value={purchaseForm.dimUnit}
+                        value={purchaseForm.dimUnit || 'cm'}
                         onChange={(e) => {
                           const unit = e.target.value as 'cm' | 'm';
                           const newForm = { ...purchaseForm, dimUnit: unit };
@@ -5917,7 +6112,7 @@ export default function App() {
                         className="flex-1 p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black" 
                       />
                       <select 
-                        value={purchaseForm.weightUnit}
+                        value={purchaseForm.weightUnit || 'kg'}
                         onChange={(e) => {
                           const unit = e.target.value as 'g' | 'kg';
                           const newForm = { ...purchaseForm, weightUnit: unit };
@@ -6098,7 +6293,7 @@ export default function App() {
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Статус</label>
                 <select 
-                  value={purchaseForm.status}
+                  value={purchaseForm.status || 'new'}
                   onChange={(e) => setPurchaseForm({...purchaseForm, status: e.target.value as any})}
                   className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black"
                 >
@@ -6112,7 +6307,7 @@ export default function App() {
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Трек-номер</label>
                 <input 
                   type="text" 
-                  value={purchaseForm.trackNumber}
+                  value={purchaseForm.trackNumber || ''}
                   onChange={(e) => handleTrackNumberChange(e.target.value)}
                   placeholder="TB123456789" 
                   className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black transition-all"
@@ -6162,7 +6357,7 @@ export default function App() {
                     <div className="relative">
                       <input 
                         type="text" 
-                        value={purchaseForm.photo}
+                        value={purchaseForm.photo || ''}
                         onChange={(e) => setPurchaseForm({ ...purchaseForm, photo: e.target.value })}
                         placeholder="Або вставте посилання на фото..." 
                         className="w-full p-3 bg-gray-50 rounded-xl border border-gray-100 font-bold text-xs focus:outline-none focus:ring-2 focus:ring-black" 
@@ -6177,7 +6372,7 @@ export default function App() {
               <div className="space-y-2 lg:col-span-3">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Коментар</label>
                 <textarea 
-                  value={purchaseForm.comment}
+                  value={purchaseForm.comment || ''}
                   onChange={(e) => setPurchaseForm({...purchaseForm, comment: e.target.value})}
                   rows={3}
                   placeholder="Додаткова інформація..." 
@@ -6226,7 +6421,7 @@ export default function App() {
                   <input 
                     type="text" 
                     list="existing-tracks-modal"
-                    value={assignTrackNumber}
+                    value={assignTrackNumber || ''}
                     onChange={(e) => setAssignTrackNumber(e.target.value)}
                     placeholder="Введіть або вставте трек-номер..."
                     className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black"
@@ -6297,7 +6492,7 @@ export default function App() {
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Вставте текст з трек-номерами</label>
                 <textarea 
                   rows={8}
-                  value={bulkImportText}
+                  value={bulkImportText || ''}
                   onChange={(e) => setBulkImportText(e.target.value)}
                   placeholder="Вставте скопійований текст тут..."
                   className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-black"
@@ -6350,7 +6545,7 @@ export default function App() {
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Назва партії</label>
                 <input 
                   type="text" 
-                  value={batchForm.name}
+                  value={batchForm.name || ''}
                   onChange={(e) => setBatchForm({...batchForm, name: e.target.value})}
                   placeholder="Назва партії" 
                   className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black" 
@@ -6360,7 +6555,7 @@ export default function App() {
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Дата відправки</label>
                 <input 
                   type="date" 
-                  value={batchForm.shipmentDate}
+                  value={batchForm.shipmentDate || ''}
                   onChange={(e) => setBatchForm({...batchForm, shipmentDate: e.target.value})}
                   className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black" 
                 />
@@ -6368,7 +6563,7 @@ export default function App() {
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Склад</label>
                 <select 
-                  value={batchForm.warehouse}
+                  value={batchForm.warehouse || 'china'}
                   onChange={(e) => setBatchForm({...batchForm, warehouse: e.target.value})}
                   className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black"
                 >
@@ -6380,7 +6575,7 @@ export default function App() {
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Тип доставки</label>
                 <select 
-                  value={batchForm.deliveryType}
+                  value={batchForm.deliveryType || 'air'}
                   onChange={(e) => setBatchForm({...batchForm, deliveryType: e.target.value as 'sea' | 'air'})}
                   className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black"
                 >
@@ -6462,7 +6657,7 @@ export default function App() {
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Назва відправки</label>
                 <input 
                   type="text" 
-                  value={localDeliveryForm.name}
+                  value={localDeliveryForm.name || ''}
                   onChange={(e) => setLocalDeliveryForm({...localDeliveryForm, name: e.target.value})}
                   placeholder="Назва" 
                   className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black" 
@@ -6471,7 +6666,7 @@ export default function App() {
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Тип доставки</label>
                 <select 
-                  value={localDeliveryForm.type}
+                  value={localDeliveryForm.type || 'np'}
                   onChange={(e) => setLocalDeliveryForm({...localDeliveryForm, type: e.target.value as 'novaposhta' | 'pickup'})}
                   className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black"
                 >
@@ -6609,7 +6804,7 @@ export default function App() {
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Тариф</label>
                 <select 
-                  value={costForm.tariffId}
+                  value={costForm.tariffId || ''}
                   onChange={(e) => setCostForm({...costForm, tariffId: e.target.value})}
                   className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-amber-400"
                 >
@@ -6930,7 +7125,7 @@ export default function App() {
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Назва тарифу</label>
                     <input 
                       type="text" 
-                      value={tariffForm.name}
+                      value={tariffForm.name || ''}
                       onChange={(e) => setTariffForm({...tariffForm, name: e.target.value})}
                       placeholder="Наприклад: Авіа Експрес" 
                       className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-blue-400" 
@@ -6941,7 +7136,7 @@ export default function App() {
                     <div className="space-y-2">
                       <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Іконка</label>
                       <select 
-                        value={tariffForm.iconName}
+                        value={tariffForm.iconName || ''}
                         onChange={(e) => setTariffForm({...tariffForm, iconName: e.target.value as any})}
                         className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-blue-400"
                       >
@@ -6956,7 +7151,7 @@ export default function App() {
                       <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Термін доставки</label>
                       <input 
                         type="text" 
-                        value={tariffForm.deliveryDays}
+                        value={tariffForm.deliveryDays || ''}
                         onChange={(e) => setTariffForm({...tariffForm, deliveryDays: e.target.value})}
                         placeholder="7-10 днів" 
                         className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-blue-400" 
@@ -6967,7 +7162,7 @@ export default function App() {
                   <div className="space-y-2">
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Опис</label>
                     <textarea 
-                      value={tariffForm.description}
+                      value={tariffForm.description || ''}
                       onChange={(e) => setTariffForm({...tariffForm, description: e.target.value})}
                       placeholder="Короткий опис тарифу" 
                       rows={3}
@@ -7136,7 +7331,7 @@ export default function App() {
                         <label className="text-[8px] font-black text-gray-400 uppercase">Мін</label>
                         <input 
                           type="number" 
-                          value={tier.min}
+                          value={tier.min || 0}
                           onChange={(e) => {
                             const newTiers = [...(tariffForm.densityTiers || [])];
                             newTiers[index].min = parseFloat(e.target.value) || 0;
@@ -7162,7 +7357,7 @@ export default function App() {
                         <label className="text-[8px] font-black text-gray-400 uppercase">Ціна</label>
                         <input 
                           type="number" 
-                          value={tier.price}
+                          value={tier.price || 0}
                           onChange={(e) => {
                             const newTiers = [...(tariffForm.densityTiers || [])];
                             newTiers[index].price = parseFloat(e.target.value) || 0;
@@ -7174,7 +7369,7 @@ export default function App() {
                       <div className="space-y-1">
                         <label className="text-[8px] font-black text-gray-400 uppercase">Од.</label>
                         <select 
-                          value={tier.unit}
+                          value={tier.unit || 'kg'}
                           onChange={(e) => {
                             const newTiers = [...(tariffForm.densityTiers || [])];
                             newTiers[index].unit = e.target.value as 'kg' | 'm3';
@@ -7270,7 +7465,7 @@ export default function App() {
               <div className="space-y-4">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block ml-1">Текст для імпорту</label>
                 <textarea 
-                  value={waybillImportText}
+                  value={waybillImportText || ''}
                   onChange={(e) => setWaybillImportText(e.target.value)}
                   placeholder="Вставте дані тут..."
                   className="w-full h-64 bg-gray-50 border border-gray-100 rounded-3xl p-6 text-sm font-bold outline-none focus:ring-4 focus:ring-indigo-500/10 transition-all resize-none"
