@@ -20,7 +20,8 @@ import {
   Train, 
   Truck, 
   Info, 
-  ChevronRight, 
+  ChevronLeft,
+  ChevronRight,
   Scale, 
   Maximize,
   Layers,
@@ -44,6 +45,7 @@ import {
   X,
   Upload,
   FileText,
+  ClipboardList,
   PlusCircle,
   ArrowRight,
   Calendar,
@@ -67,7 +69,8 @@ import {
   MinusSquare,
   Zap,
   Copy,
-  Camera
+  Camera,
+  Smartphone
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import ExcelJS from 'exceljs';
@@ -204,7 +207,7 @@ const getTariffIcon = (name: string) => {
 
 type CalculatorType = 'international' | 'novaposhta' | 'transfer';
 
-type CRMModule = 'dashboard' | 'purchases' | 'china_warehouse' | 'consolidation' | 'ua_warehouse' | 'local_delivery' | 'my_warehouse' | 'issue_to_store' | 'settings' | 'calculator';
+type CRMModule = 'dashboard' | 'purchases' | 'china_warehouse' | 'consolidation' | 'ua_warehouse' | 'local_delivery' | 'my_warehouse' | 'issue_to_store' | 'settings' | 'calculator' | 'pinduoduo';
 
 interface CRMModuleConfig {
   id: CRMModule;
@@ -804,6 +807,82 @@ export default function App() {
   const [shippingPricePerKg, setShippingPricePerKg] = useState(12);
   const [selectedPurchaseIds, setSelectedPurchaseIds] = useState<string[]>([]);
 
+  const [showImportWaybillModal, setShowImportWaybillModal] = useState(false);
+  const [waybillImportText, setWaybillImportText] = useState('');
+
+  const parseWaybillText = (text: string) => {
+    const blocks = text.split(/\n\s*\n/).filter(b => b.trim().length > 0);
+    const newPurchases: Purchase[] = [];
+    
+    blocks.forEach(block => {
+      const lines = block.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      if (lines.length < 7) return;
+
+      const trackNumber = lines[0];
+      const arrivalDate = lines[1];
+      const weight = parseFloat(lines[4].replace(',', '.'));
+      const volume = parseFloat(lines[5].replace(',', '.'));
+      const density = parseFloat(lines[6].replace(',', '.'));
+      
+      let shippingCost = 0;
+      if (selectedTariff.densityTiers && selectedTariff.densityTiers.length > 0) {
+        const tier = selectedTariff.densityTiers.find(t => density >= t.min && (t.max === null || density < t.max));
+        if (tier) {
+          shippingCost = tier.unit === 'kg' ? weight * tier.price : volume * tier.price;
+        } else {
+          const lastTier = selectedTariff.densityTiers[selectedTariff.densityTiers.length - 1];
+          shippingCost = lastTier.unit === 'kg' ? weight * lastTier.price : volume * lastTier.price;
+        }
+      } else if (selectedTariff.pricePerKg) {
+        const volumetricWeight = selectedTariff.volumetricFactor ? (volume * 1000000) / selectedTariff.volumetricFactor : 0;
+        const chargeableWeight = Math.max(weight, volumetricWeight);
+        shippingCost = chargeableWeight * selectedTariff.pricePerKg;
+      }
+      
+      if (selectedTariff.minCost && shippingCost < selectedTariff.minCost) {
+        shippingCost = selectedTariff.minCost;
+      }
+
+      const newPurchase: Purchase = {
+        id: Math.random().toString(36).substr(2, 9),
+        name: `Товар з накладної ${trackNumber}`,
+        platform: 'Pinduoduo',
+        link: '',
+        priceYuan: 0,
+        quantity: 1,
+        exchangeRate: cnyToUah,
+        trackNumber: trackNumber,
+        photo: '',
+        comment: `Імпортовано: ${arrivalDate}`,
+        status: 'at_china_warehouse',
+        createdAt: new Date().toISOString(),
+        weight: weight,
+        volume: volume,
+        density: density,
+        arrivalDate: arrivalDate,
+        deliveryCostPerItem: shippingCost,
+        shippingCost: shippingCost,
+      };
+      
+      newPurchases.push(newPurchase);
+    });
+    
+    return newPurchases;
+  };
+
+  const handleImportWaybills = () => {
+    const imported = parseWaybillText(waybillImportText);
+    if (imported.length === 0) {
+      addNotification('Не вдалося розпізнати дані. Перевірте формат тексту.', 'error');
+      return;
+    }
+    
+    setPurchases([...purchases, ...imported]);
+    setShowImportWaybillModal(false);
+    setWaybillImportText('');
+    addNotification(`Успішно імпортовано ${imported.length} накладних`, 'success');
+  };
+
   const waybills = useMemo(() => {
     const filtered = purchases.filter(p => p.status === 'at_china_warehouse');
     const grouped = filtered.reduce((acc, p) => {
@@ -815,6 +894,7 @@ export default function App() {
           totalQuantity: 0,
           totalWeight: 0,
           totalCostYuan: 0,
+          totalDeliveryCost: 0,
           arrivalDate: p.arrivalDate || '',
           status: p.status
         };
@@ -823,6 +903,7 @@ export default function App() {
       acc[track].totalQuantity += p.quantity;
       acc[track].totalWeight += p.weight || 0;
       acc[track].totalCostYuan += (p.priceYuan * p.quantity);
+      acc[track].totalDeliveryCost += (p.shippingCost || 0);
       return acc;
     }, {} as Record<string, any>);
 
@@ -1984,6 +2065,7 @@ export default function App() {
     { id: 'local_delivery', title: 'Нова Пошта', icon: Truck, description: 'Доставка по Україні та самовивіз' },
     { id: 'my_warehouse', title: 'Прибуло на мій склад', icon: Store, description: 'Наявність товарів та прайс-листи' },
     { id: 'issue_to_store', title: 'Видача на магазин', icon: Store, description: 'Продажі та видача товарів' },
+    { id: 'pinduoduo', title: 'Pinduoduo App', icon: Smartphone, description: 'Мобільний доступ до маркетплейсу' },
     { id: 'settings', title: 'Налаштування', icon: Settings, description: 'Курси валют та системні параметри' },
   ];
 
@@ -3159,16 +3241,25 @@ export default function App() {
                             />
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                           </div>
-                          <button 
-                            onClick={() => {
-                              setCrmModule('purchases');
-                              addNotification('Виберіть товари в закупках для створення нової накладної', 'info');
-                            }}
-                            className="bg-black text-white px-6 py-3 rounded-xl font-black uppercase tracking-widest text-[10px] flex items-center gap-2 hover:bg-gray-900 transition-all shadow-lg shadow-gray-100"
-                          >
-                            <Plus className="w-4 h-4" />
-                            Додати накладну
-                          </button>
+                          <div className="flex gap-4">
+                            <button 
+                              onClick={() => setShowImportWaybillModal(true)}
+                              className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-black uppercase tracking-widest text-[10px] flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100"
+                            >
+                              <ClipboardList className="w-4 h-4" />
+                              Імпорт накладних
+                            </button>
+                            <button 
+                              onClick={() => {
+                                setCrmModule('purchases');
+                                addNotification('Виберіть товари в закупках для створення нової накладної', 'info');
+                              }}
+                              className="bg-black text-white px-6 py-3 rounded-xl font-black uppercase tracking-widest text-[10px] flex items-center gap-2 hover:bg-gray-900 transition-all shadow-lg shadow-gray-100"
+                            >
+                              <Plus className="w-4 h-4" />
+                              Додати накладну
+                            </button>
+                          </div>
                         </div>
                       </div>
 
@@ -3195,7 +3286,7 @@ export default function App() {
                                   </div>
                                 </div>
 
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-8 flex-1 px-0 lg:px-12">
+                                <div className="grid grid-cols-2 md:grid-cols-5 gap-8 flex-1 px-0 lg:px-12">
                                   <div>
                                     <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Товари</p>
                                     <p className="text-sm font-bold text-black">{w.items.length} поз. ({w.totalQuantity} шт)</p>
@@ -3207,6 +3298,10 @@ export default function App() {
                                   <div>
                                     <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Вартість</p>
                                     <p className="text-sm font-bold text-black">¥{w.totalCostYuan.toFixed(2)}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Доставка</p>
+                                    <p className="text-sm font-bold text-indigo-600">${w.totalDeliveryCost.toFixed(2)}</p>
                                   </div>
                                   <div>
                                     <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Статус</p>
@@ -4948,6 +5043,113 @@ export default function App() {
                           <p className="text-gray-400 text-sm font-bold mt-2">Додайте товари з Нової Пошти, щоб сформувати прайс</p>
                         </div>
                       )}
+                    </div>
+                  ) : crmModule === 'pinduoduo' ? (
+                    <div className="flex flex-col items-center justify-center space-y-8 py-10">
+                      <div className="text-center mb-4">
+                        <h2 className="text-2xl font-black text-black uppercase tracking-tight">Pinduoduo Simulator</h2>
+                        <p className="text-gray-400 text-sm font-bold">Мобільна версія маркетплейсу в браузері</p>
+                      </div>
+
+                      {/* Phone Frame */}
+                      <div className="relative w-[480px] h-[880px] bg-black rounded-[4rem] border-[12px] border-gray-900 shadow-2xl overflow-hidden flex flex-col">
+                        {/* Navigation Bar */}
+                        <div className="h-16 bg-gray-900 flex items-center justify-between px-6 z-20 border-b border-white/5">
+                          <div className="flex items-center gap-2">
+                            <button 
+                              onClick={() => {
+                                try {
+                                  const frame = document.getElementById('pinduoduo-frame') as HTMLIFrameElement;
+                                  frame.contentWindow?.history.back();
+                                } catch (e) {
+                                  console.log("Navigation restricted by browser security");
+                                }
+                              }}
+                              className="p-2 hover:bg-white/10 rounded-lg transition-colors text-white/60 hover:text-white"
+                              title="Назад"
+                            >
+                              <ChevronLeft className="w-5 h-5" />
+                            </button>
+                            <button 
+                              onClick={() => {
+                                try {
+                                  const frame = document.getElementById('pinduoduo-frame') as HTMLIFrameElement;
+                                  frame.contentWindow?.history.forward();
+                                } catch (e) {
+                                  console.log("Navigation restricted by browser security");
+                                }
+                              }}
+                              className="p-2 hover:bg-white/10 rounded-lg transition-colors text-white/60 hover:text-white"
+                              title="Вперед"
+                            >
+                              <ChevronRight className="w-5 h-5" />
+                            </button>
+                            <button 
+                              onClick={() => {
+                                const frame = document.getElementById('pinduoduo-frame') as HTMLIFrameElement;
+                                if (frame) frame.src = frame.src;
+                              }}
+                              className="p-2 hover:bg-white/10 rounded-lg transition-colors text-white/60 hover:text-white"
+                              title="Оновити"
+                            >
+                              <RotateCcw className="w-4 h-4" />
+                            </button>
+                            <button 
+                              onClick={() => {
+                                const frame = document.getElementById('pinduoduo-frame') as HTMLIFrameElement;
+                                if (frame) frame.src = "https://mobile.yangkeduo.com/";
+                              }}
+                              className="p-2 hover:bg-white/10 rounded-lg transition-colors text-white/60 hover:text-white"
+                              title="На головну"
+                            >
+                              <Home className="w-4 h-4" />
+                            </button>
+                          </div>
+                          
+                          <div className="flex-1 mx-4">
+                            <div className="bg-white/5 rounded-full px-4 py-1.5 text-[10px] text-white/30 truncate font-mono text-center border border-white/5">
+                              mobile.yangkeduo.com
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.5)]" />
+                            <span className="text-[9px] font-black text-white/40 uppercase tracking-[0.2em]">Online</span>
+                          </div>
+                        </div>
+                        
+                        {/* Iframe Container */}
+                        <div className="flex-1 bg-white relative z-10">
+                          <iframe 
+                            id="pinduoduo-frame"
+                            src="https://mobile.yangkeduo.com/" 
+                            className="w-full h-full border-none"
+                            title="Pinduoduo Mobile"
+                          />
+                        </div>
+
+                        {/* Home Bar */}
+                        <div className="h-6 bg-gray-900 flex items-center justify-center z-20">
+                          <div className="w-24 h-1 bg-white/20 rounded-full" />
+                        </div>
+                      </div>
+
+                      <div className="max-w-md text-center space-y-4">
+                        <div className="bg-yellow-50 border border-yellow-200 p-4 rounded-2xl">
+                          <p className="text-xs text-yellow-800 font-bold leading-relaxed">
+                            <strong>Порада:</strong> Через обмеження безпеки браузера (Cross-Origin), кнопки "Назад" та "Вперед" не можуть керувати історією всередині сайту Pinduoduo. Використовуйте навігацію безпосередньо в інтерфейсі додатка або кнопку "На головну".
+                          </p>
+                        </div>
+                        <a 
+                          href="https://mobile.yangkeduo.com/" 
+                          target="_blank" 
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-2 bg-black text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-gray-800 transition-all"
+                        >
+                          <ExternalLink className="w-4 h-4" />
+                          Відкрити в новому вікні
+                        </a>
+                      </div>
                     </div>
                   ) : crmModule === 'settings' ? (
                     <div className="space-y-8">
@@ -7042,6 +7244,57 @@ export default function App() {
           }}
           onCancel={() => setConfirmModal(null)}
         />
+      )}
+
+      {showImportWaybillModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-white rounded-[40px] w-full max-w-2xl overflow-hidden shadow-2xl"
+          >
+            <div className="p-10 border-b border-gray-50 flex justify-between items-center bg-indigo-600 text-white">
+              <div>
+                <h2 className="text-3xl font-black uppercase tracking-tight">Імпорт накладних</h2>
+                <p className="text-indigo-100 text-sm font-bold mt-1 uppercase tracking-widest">Вставте текст з даними для автоматичного створення</p>
+              </div>
+              <button 
+                onClick={() => setShowImportWaybillModal(false)}
+                className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center hover:bg-white/20 transition-all"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            
+            <div className="p-10 space-y-8">
+              <div className="space-y-4">
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block ml-1">Текст для імпорту</label>
+                <textarea 
+                  value={waybillImportText}
+                  onChange={(e) => setWaybillImportText(e.target.value)}
+                  placeholder="Вставте дані тут..."
+                  className="w-full h-64 bg-gray-50 border border-gray-100 rounded-3xl p-6 text-sm font-bold outline-none focus:ring-4 focus:ring-indigo-500/10 transition-all resize-none"
+                />
+                <div className="bg-amber-50 border border-amber-100 rounded-2xl p-4 flex gap-3">
+                  <Info className="w-5 h-5 text-amber-600 flex-shrink-0" />
+                  <p className="text-xs font-bold text-amber-800 leading-relaxed">
+                    Система автоматично розпізнає трек-номер, дату, вагу, об'єм та щільність. 
+                    Вартість доставки буде розрахована згідно з обраним тарифом.
+                  </p>
+                </div>
+              </div>
+
+              <button 
+                onClick={handleImportWaybills}
+                disabled={!waybillImportText.trim()}
+                className="w-full py-6 bg-indigo-600 text-white rounded-2xl font-black text-xl uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-100 disabled:opacity-50 disabled:shadow-none flex items-center justify-center gap-3"
+              >
+                <PlusCircle className="w-6 h-6" />
+                Створити накладні
+              </button>
+            </div>
+          </motion.div>
+        </div>
       )}
 
       {selectedPurchaseIds.length > 0 && (
