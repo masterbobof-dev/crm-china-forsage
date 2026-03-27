@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useMemo, useEffect } from 'react';
+import { BulkAddItemsModal } from './components/BulkAddItemsModal';
 import { QrReader } from 'react-qr-reader';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import JsBarcode from 'jsbarcode';
@@ -226,7 +227,7 @@ interface MoneyTransferData {
   method: 'card' | 'cash';
 }
 
-interface Purchase {
+export interface Purchase {
   id: string;
   platform: string;
   name: string;
@@ -505,6 +506,25 @@ export default function App() {
   const addNotification = (text: string, type: 'success' | 'info' | 'error' = 'info') => {
     setNotifications(prev => [{ id: Math.random().toString(36).substr(2, 9), text, time: 'Щойно', type }, ...prev].slice(0, 5));
   };
+  
+  const handleBulkSave = async (items: Partial<Purchase>[]) => {
+    const newPurchases = items.map(item => ({
+      ...item,
+      id: Math.random().toString(36).substr(2, 9),
+      createdAt: new Date().toISOString(),
+      status: 'purchased'
+    }));
+    
+    // Save to Supabase
+    const { error } = await supabase.from('purchases').insert(newPurchases);
+    if (error) {
+      addNotification('Помилка при збереженні: ' + error.message, 'error');
+    } else {
+      addNotification('Товари успішно додані', 'success');
+      setPurchases([...newPurchases as Purchase[], ...purchases]);
+      setShowBulkAddModal(false);
+    }
+  };
 
   useEffect(() => {
     const checkSupabase = async () => {
@@ -531,6 +551,7 @@ export default function App() {
     atUAWarehouse: 15
   });
   const [showAddPurchaseModal, setShowAddPurchaseModal] = useState(false);
+  const [showBulkAddModal, setShowBulkAddModal] = useState(false);
   const [selectedTrackNumber, setSelectedTrackNumber] = useState<string | null>(null);
   const [showImportTracksModal, setShowImportTracksModal] = useState(false);
   const [bulkImportText, setBulkImportText] = useState('');
@@ -2912,6 +2933,13 @@ export default function App() {
                           >
                             <Plus className="w-5 h-5" />
                             Нова закупка
+                          </button>
+                          <button 
+                            onClick={() => setShowBulkAddModal(true)}
+                            className="bg-gray-800 text-white px-8 py-5 rounded-2xl font-black uppercase tracking-widest text-xs flex items-center gap-3 hover:bg-gray-900 transition-all shadow-lg shadow-gray-100 whitespace-nowrap"
+                          >
+                            <Plus className="w-5 h-5" />
+                            Масове додавання
                           </button>
                           <button 
                             onClick={() => setShowImportTracksModal(true)}
@@ -5410,6 +5438,11 @@ export default function App() {
           onCancel={() => setCropImage(null)}
         />
       )}
+      <BulkAddItemsModal 
+        show={showBulkAddModal} 
+        onClose={() => setShowBulkAddModal(false)} 
+        onSave={handleBulkSave} 
+      />
       {showAddPurchaseModal && (
         <div className="fixed inset-0 z-[300] flex items-center justify-center px-4 sm:px-6">
           <div className="absolute inset-0 bg-black/90 backdrop-blur-sm" onClick={() => setShowAddPurchaseModal(false)} />
