@@ -1,0 +1,113 @@
+364:          <button onClick={onCancel} className="text-gray-400 hover:text-red-500 transition-colors">
+394:            <button
+400:            <button
+427:          <button 
+433:          <button 
+1873:            <button 
+1882:            <button 
+1902:                <button 
+1912:                <button 
+1922:                <button 
+1986:                    <button 
+1995:                    <button 
+2123:                      <button 
+2138:                      <button 
+2153:                      <button 
+2187:                    <button
+2310:                  <button 
+2319:                  <button 
+2465:                <button 
+2612:                      <button
+2648:                  <button className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 bg-yellow-400 rounded-lg flex items-center justify-center hover:bg-yellow-500 transition-colors">
+2859:                          <button 
+2872:                          <button 
+2885:                          <button 
+2915:                          <button 
+2931:                                  <button 
+2995:                                        <button 
+3010:                                          <button 
+3019:                                            <button 
+3079:                                          <button 
+3086:                                          <button 
+3148:                                <button 
+3176:                                    <button 
+3185:                                      <button 
+3193:                                      <button 
+3229:                                      <button 
+3264:                                      <button 
+3271:                                      <button 
+3291:                          <button 
+3321:                                          <button 
+3329:                                          <button 
+3360:                                          <button 
+3430:                                      <button 
+3437:                                      <button 
+3453:                                    <button 
+3460:                                    <button 
+3569:                          <button 
+3576:                          <button 
+3598:                          <button 
+3627:                                <button 
+3672:                                    <button 
+3682:                                      <button 
+3690:                                      <button 
+3749:                                      <button 
+3756:                                      <button 
+3781:                          <button 
+3823:                          <button 
+3866:                                        <button 
+3902:                                    <button 
+3917:                                    <button 
+3924:                                    <button 
+4060:                                        <button 
+4120:                                          <button 
+4128:                                          <button 
+4198:                                          <button 
+4205:                                          <button 
+4252:                              <button 
+4264:                              <button 
+4336:                            <button 
+4390:                            <button 
+4400:                              <button 
+4409:                              <button 
+4419:                            <button 
+4435:                            <button 
+4451:                            <button 
+4466:                            <button 
+4583:                                            <button 
+4591:                                            <button 
+4723:                                  <button 
+4813:                                        <button 
+5003:                            <button 
+5043:                                  <button 
+5052:                                  <button 
+5143:                <button 
+5154:                <button 
+5166:                <button 
+5174:                <button 
+5324:                          <button 
+5334:                          <button 
+5350:              <button 
+5414:            <button onClick={() => {
+5913:                        <button 
+5949:              <button 
+5955:              <button 
+5974:            <button onClick={() => setShowImportTracksModal(false)} className="absolute top-4 right-4 md:top-6 md:right-6 text-gray-400 hover:text-black transition-colors">
+5999:            <button 
+6017:            <button onClick={() => {
+6110:            <button 
+6129:            <button onClick={() => {
+6221:            <button 
+6240:            <button onClick={() => setTrackingModal({ show: false, data: null, loading: false, error: '' })} className="absolute top-4 right-4 md:top-6 md:right-6 text-gray-400 hover:text-black transition-colors">
+6286:            <button onClick={() => setShowCostModal({ show: false, batchId: null })} className="absolute top-4 right-4 md:top-6 md:right-6 text-gray-400 hover:text-black transition-colors">
+6344:                <button 
+6356:                <button 
+6368:                <button 
+6425:            <button 
+6442:            <button onClick={() => setShowSaleModal({ show: false, purchaseId: null })} className="absolute top-8 right-8 text-gray-400 hover:text-black transition-colors z-20">
+6584:                <button 
+6605:            <button onClick={() => setShowTariffModal({ show: false, tariffId: null })} className="absolute top-6 right-6 text-gray-400 hover:text-black transition-colors">
+6807:                  <button 
+6875:                      <button 
+6894:              <button 
+6958:            <button 

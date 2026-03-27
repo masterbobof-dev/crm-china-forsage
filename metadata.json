@@ -1,0 +1,5 @@
+{
+  "name": "Remix: Remix: CRM Forsage China",
+  "description": "Comprehensive CRM and logistics calculator for shipping from China, featuring advanced cost estimation and inventory management.",
+  "requestFramePermissions": ["camera"]
+}
