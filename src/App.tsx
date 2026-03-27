@@ -75,7 +75,7 @@ import { motion } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { supabase } from './supabase';
-import { useSupabaseSync } from './hooks/useSupabaseSync';
+import { useSupabaseSync, toSnakeCase } from './hooks/useSupabaseSync';
 
 // Utility for Tailwind classes
 function cn(...inputs: ClassValue[]) {
@@ -266,6 +266,10 @@ export interface Purchase {
   barcode?: string;
   saleDestination?: 'physical_store' | 'online_store' | 'personal_use';
   createdAt: string;
+  brand?: string;
+  radius?: string;
+  season?: string;
+  article?: string;
 }
 
 interface LocalDeliveryGroup {
@@ -452,7 +456,7 @@ export default function App() {
     return saved ? JSON.parse(saved) : DEFAULT_TARIFFS;
   });
   const [activeTab, setActiveTab] = useState<CalculatorType>('international');
-  const [inputMethod, setInputMethod] = useState<'dimensions' | 'volume'>('dimensions');
+  const [inputMethod, setInputMethod] = useState<'dims' | 'density'>('dims');
   const [parcel, setParcel] = useState<ParcelData>({
     weight: 0,
     length: 0,
@@ -473,7 +477,8 @@ export default function App() {
     height: 0,
     declaredValue: 0,
     cityRecipient: '',
-    citySender: ''
+    citySender: '',
+    destination: 'ukraine'
   });
   const [transferData, setTransferData] = useState({
     amount: 0,
@@ -485,7 +490,7 @@ export default function App() {
 
   const { density, finalVolumeM3 } = useMemo(() => {
     let volM3 = 0;
-    if (inputMethod === 'dimensions') {
+    if (inputMethod === 'dims') {
       volM3 = (parcel.length * parcel.width * parcel.height) / 1000000;
     } else {
       volM3 = parcel.volume;
@@ -507,17 +512,31 @@ export default function App() {
     setNotifications(prev => [{ id: Math.random().toString(36).substr(2, 9), text, time: 'Щойно', type }, ...prev].slice(0, 5));
   };
   
+  const [showAssignTrackModal, setShowAssignTrackModal] = useState(false);
+  const [assignTrackNumber, setAssignTrackNumber] = useState('');
+
   const handleBulkSave = async (items: Partial<Purchase>[]) => {
     const newPurchases = items.map(item => ({
-      ...item,
       id: Math.random().toString(36).substr(2, 9),
-      createdAt: new Date().toISOString(),
-      status: 'purchased'
+      name: item.name || '',
+      platform: item.platform || 'Taobao',
+      link: item.link || '',
+      priceYuan: item.priceYuan || 0,
+      quantity: item.quantity || 1,
+      sellingPrice: item.sellingPrice || 0,
+      exchangeRate: 5.5,
+      trackNumber: '',
+      photo: '',
+      comment: '',
+      status: 'purchased' as Purchase['status'],
+      createdAt: new Date().toISOString()
     }));
     
+    const snakeCasePurchases = toSnakeCase(newPurchases);
     // Save to Supabase
-    const { error } = await supabase.from('purchases').insert(newPurchases);
+    const { error } = await supabase.from('purchases').insert(snakeCasePurchases);
     if (error) {
+      console.error('Supabase insert error:', error);
       addNotification('Помилка при збереженні: ' + error.message, 'error');
     } else {
       addNotification('Товари успішно додані', 'success');
@@ -611,6 +630,17 @@ export default function App() {
   const [usdToUah, setUsdToUah] = useState(() => parseFloat(localStorage.getItem('usdToUah') || '40'));
   const [novaPoshtaApiKey, setNovaPoshtaApiKey] = useState(() => localStorage.getItem('novaPoshtaApiKey') || '');
   const [priceListMargin, setPriceListMargin] = useState(() => parseFloat(localStorage.getItem('priceListMargin') || '0'));
+
+  const handleBulkDelete = async (ids: string[]) => {
+    const { error } = await supabase.from('purchases').delete().in('id', ids);
+    if (error) {
+      addNotification('Помилка при видаленні: ' + error.message, 'error');
+    } else {
+      addNotification('Товари успішно видалені', 'success');
+      setPurchases(purchases.filter(p => !ids.includes(p.id)));
+      setSelectedPurchaseIds([]);
+    }
+  };
 
   useEffect(() => {
     localStorage.setItem('cnyToUah', cnyToUah.toString());
@@ -752,7 +782,11 @@ export default function App() {
     isInsured: false,
     declaredValue: 0,
     shippingCost: 0,
-    status: 'purchased' as Purchase['status']
+    status: 'purchased' as Purchase['status'],
+    brand: '',
+    radius: '',
+    season: '',
+    article: ''
   });
   const [showSaleModal, setShowSaleModal] = useState<{show: boolean, purchaseId: string | null}>({ show: false, purchaseId: null });
   const [saleForm, setSaleForm] = useState({
@@ -769,6 +803,63 @@ export default function App() {
   const [showStorePreview, setShowStorePreview] = useState(false);
   const [shippingPricePerKg, setShippingPricePerKg] = useState(12);
   const [selectedPurchaseIds, setSelectedPurchaseIds] = useState<string[]>([]);
+
+  const waybills = useMemo(() => {
+    const filtered = purchases.filter(p => p.status === 'at_china_warehouse');
+    const grouped = filtered.reduce((acc, p) => {
+      const track = p.trackNumber || 'Без треку';
+      if (!acc[track]) {
+        acc[track] = {
+          trackNumber: track,
+          items: [],
+          totalQuantity: 0,
+          totalWeight: 0,
+          totalCostYuan: 0,
+          arrivalDate: p.arrivalDate || '',
+          status: p.status
+        };
+      }
+      acc[track].items.push(p);
+      acc[track].totalQuantity += p.quantity;
+      acc[track].totalWeight += p.weight || 0;
+      acc[track].totalCostYuan += (p.priceYuan * p.quantity);
+      return acc;
+    }, {} as Record<string, any>);
+
+    return Object.values(grouped).filter((w: any) => 
+      w.trackNumber.toLowerCase().includes(chinaWarehouseSearch.toLowerCase()) ||
+      w.items.some((i: any) => i.name.toLowerCase().includes(chinaWarehouseSearch.toLowerCase()))
+    );
+  }, [purchases, chinaWarehouseSearch]);
+
+  const existingTrackNumbers = useMemo(() => {
+    const tracks = new Set(purchases.map(p => p.trackNumber).filter(Boolean));
+    return Array.from(tracks);
+  }, [purchases]);
+
+  const handleAssignTrack = (ids: string[], track: string) => {
+    if (!track) {
+      addNotification('Введіть трек-номер', 'error');
+      return;
+    }
+    setPurchases(purchases.map(p => 
+      ids.includes(p.id) 
+        ? { ...p, trackNumber: track, status: 'at_china_warehouse' as Purchase['status'] } 
+        : p
+    ));
+    addNotification(`Товари (${ids.length}) додано до накладної ${track}`, 'success');
+    setSelectedPurchaseIds([]);
+    setShowAssignTrackModal(false);
+    setAssignTrackNumber('');
+  };
+
+  const handleEditWaybill = (oldTrack: string, newTrack: string) => {
+    if (!newTrack || oldTrack === newTrack) return;
+    setPurchases(purchases.map(p => 
+      p.trackNumber === oldTrack ? { ...p, trackNumber: newTrack } : p
+    ));
+    addNotification(`Накладну ${oldTrack} змінено на ${newTrack}`, 'success');
+  };
   const [showScanner, setShowScanner] = useState(false);
   const [scannerInput, setScannerInput] = useState('');
   const [isInventoryMode, setIsInventoryMode] = useState(false);
@@ -1197,9 +1288,9 @@ export default function App() {
   const filteredPurchases = useMemo(() => {
     return purchases.filter(p => {
       const matchesSearch = 
-        p.trackNumber.toLowerCase().includes(purchaseSearch.toLowerCase()) ||
-        p.name.toLowerCase().includes(purchaseSearch.toLowerCase()) ||
-        p.platform.toLowerCase().includes(purchaseSearch.toLowerCase());
+        (p.trackNumber || '').toLowerCase().includes(purchaseSearch.toLowerCase()) ||
+        (p.name || '').toLowerCase().includes(purchaseSearch.toLowerCase()) ||
+        (p.platform || '').toLowerCase().includes(purchaseSearch.toLowerCase());
       
       const matchesStatus = statusFilter === 'all' || p.status === statusFilter;
       
@@ -1410,7 +1501,11 @@ export default function App() {
       isInsured: false,
       declaredValue: 0,
       shippingCost: 0,
-      status: purchase.status
+      status: purchase.status,
+      brand: '',
+      radius: '',
+      season: '',
+      article: ''
     });
     setEditingPurchaseId(null);
     setShowAddPurchaseModal(true);
@@ -1441,7 +1536,11 @@ export default function App() {
       isInsured: purchase.isInsured || false,
       declaredValue: purchase.declaredValue || 0,
       shippingCost: purchase.shippingCost || 0,
-      status: purchase.status
+      status: purchase.status,
+      brand: purchase.brand || '',
+      radius: purchase.radius || '',
+      season: purchase.season || '',
+      article: purchase.article || ''
     });
     setEditingPurchaseId(purchase.id);
     setShowAddPurchaseModal(true);
@@ -1617,7 +1716,11 @@ export default function App() {
         isInsured: false,
         declaredValue: 0,
         shippingCost: 0,
-        status: 'purchased'
+        status: 'purchased',
+        brand: '',
+        radius: '',
+        season: '',
+        article: ''
       });
     } else {
       setShowAddPurchaseModal(false);
@@ -1638,8 +1741,18 @@ export default function App() {
         dimUnit: 'cm',
         weight: 0,
         weightUnit: 'kg',
+        volume: 0,
+        density: 0,
+        isFabric: false,
+        isPressed: false,
+        isInsured: false,
+        declaredValue: 0,
         shippingCost: 0,
-        status: 'purchased'
+        status: 'purchased',
+        brand: '',
+        radius: '',
+        season: '',
+        article: ''
       });
     }
   };
@@ -2874,84 +2987,40 @@ export default function App() {
                           >
                             <option value="all">Всі статуси</option>
                             <option value="purchased">Куплено</option>
-                            <option value="shipped_by_seller">Відправлено продавцем</option>
-                            <option value="arrived_china">Прибуло в Китай</option>
                           </select>
-                          
-                          <button 
-                            onClick={() => {
-                              const dataToExport = selectedPurchaseIds.length > 0 
-                                ? purchases.filter(p => selectedPurchaseIds.includes(p.id))
-                                : purchases;
-                              exportToExcel(dataToExport, 'Purchases_Export');
-                            }}
-                            className="bg-emerald-500 text-white px-6 py-3 rounded-xl font-black uppercase tracking-widest text-[10px] flex items-center gap-2 hover:bg-emerald-600 transition-all shadow-lg shadow-emerald-100"
-                          >
-                            <Download className="w-4 h-4" />
-                            Експорт Excel {selectedPurchaseIds.length > 0 ? `(${selectedPurchaseIds.length})` : ''}
-                          </button>
-
-                          <button 
-                            onClick={() => {
-                              const dataToExport = selectedPurchaseIds.length > 0 
-                                ? purchases.filter(p => selectedPurchaseIds.includes(p.id))
-                                : purchases;
-                              exportToExcelWithPhotos(dataToExport, 'Purchases_With_Photos');
-                            }}
-                            className="bg-indigo-500 text-white px-6 py-3 rounded-xl font-black uppercase tracking-widest text-[10px] flex items-center gap-2 hover:bg-indigo-600 transition-all shadow-lg shadow-indigo-100"
-                          >
-                            <Download className="w-4 h-4" />
-                            Excel з фото
-                          </button>
-
-                          <button 
-                            onClick={() => {
-                              setPurchaseForm({
-                                platform: 'Taobao',
-                                name: '',
-                                link: '',
-                                priceYuan: 0,
-                                exchangeRate: cnyToUah,
-                                quantity: 1,
-                                trackNumber: '',
-                                photo: '',
-                                comment: '',
-                                size: '',
-                                width: 0,
-                                height: 0,
-                                length: 0,
-                                dimUnit: 'cm',
-                                weight: 0,
-                                weightUnit: 'kg',
-                                shippingCost: 0,
-                                status: 'purchased'
-                              });
-                              setEditingPurchaseId(null);
-                              setShowAddPurchaseModal(true);
-                            }}
-                            className="bg-[#facc15] text-black px-8 py-5 rounded-2xl font-black uppercase tracking-widest text-xs flex items-center gap-3 hover:bg-[#eab308] transition-all shadow-lg shadow-yellow-100 whitespace-nowrap"
-                          >
-                            <Plus className="w-5 h-5" />
-                            Нова закупка
-                          </button>
                           <button 
                             onClick={() => setShowBulkAddModal(true)}
                             className="bg-gray-800 text-white px-8 py-5 rounded-2xl font-black uppercase tracking-widest text-xs flex items-center gap-3 hover:bg-gray-900 transition-all shadow-lg shadow-gray-100 whitespace-nowrap"
                           >
                             <Plus className="w-5 h-5" />
-                            Масове додавання
+                            Нова закупка
                           </button>
-                          <button 
-                            onClick={() => setShowImportTracksModal(true)}
-                            className="bg-white text-black px-8 py-5 rounded-2xl font-black uppercase tracking-widest text-xs flex items-center gap-3 hover:bg-gray-50 transition-all shadow-lg shadow-gray-100 whitespace-nowrap border-2 border-black"
-                          >
-                            <Upload className="w-5 h-5" />
-                            Масовий імпорт
-                          </button>
+                          {selectedPurchaseIds.length > 0 && (
+                            <>
+                              <button 
+                                onClick={() => setShowAssignTrackModal(true)}
+                                className="bg-blue-500 text-white px-8 py-5 rounded-2xl font-black uppercase tracking-widest text-xs flex items-center gap-3 hover:bg-blue-600 transition-all shadow-lg shadow-blue-100 whitespace-nowrap"
+                              >
+                                <Layers className="w-5 h-5" />
+                                Призначити накладну ({selectedPurchaseIds.length})
+                              </button>
+                              <button 
+                                onClick={() => {
+                                  if (confirm(`Ви впевнені, що хочете видалити ${selectedPurchaseIds.length} вибраних товарів?`)) {
+                                    handleBulkDelete(selectedPurchaseIds);
+                                  }
+                                }}
+                                className="bg-red-500 text-white px-8 py-5 rounded-2xl font-black uppercase tracking-widest text-xs flex items-center gap-3 hover:bg-red-600 transition-all shadow-lg shadow-red-100 whitespace-nowrap"
+                              >
+                                <Trash2 className="w-5 h-5" />
+                                Видалити вибрані
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
 
-                      {purchases.length > 0 ? (
+                      {purchases.filter(p => p.status === 'purchased').length > 0 ? (
                         <div className="overflow-x-auto">
                           <table className="w-full text-left border-collapse">
                             <thead>
@@ -2959,183 +3028,107 @@ export default function App() {
                                 <th className="py-4 px-4 w-10">
                                   <button 
                                     onClick={() => {
-                                      const filteredGroups = Object.values<Purchase[]>(purchases.reduce((acc, p) => {
-                                        const key = p.trackNumber || `no-track-${p.id}`;
-                                        if (!acc[key]) acc[key] = [];
-                                        acc[key].push(p);
-                                        return acc;
-                                      }, {} as Record<string, Purchase[]>)).filter(group => {
-                                        const matchesSearch = group.some(p => 
-                                          p.name.toLowerCase().includes(purchaseSearch.toLowerCase()) || 
-                                          p.trackNumber.toLowerCase().includes(purchaseSearch.toLowerCase())
-                                        );
-                                        const matchesStatus = statusFilter === 'all' || group.some(p => p.status === statusFilter);
-                                        const isEarlyStage = group.some(p => ['purchased', 'shipped_by_seller', 'arrived_china'].includes(p.status));
-                                        return matchesSearch && matchesStatus && isEarlyStage;
-                                      });
-                                      
-                                      const allIds = filteredGroups.flatMap(g => g.map(p => p.id));
-                                      toggleSelectAll(allIds);
+                                      const unassignedIds = purchases
+                                        .filter(p => p.status === 'purchased' && !p.trackNumber)
+                                        .map(p => p.id);
+                                      toggleSelectAll(unassignedIds);
                                     }}
                                     className="text-gray-400 hover:text-black transition-colors"
                                   >
                                     {selectedPurchaseIds.length > 0 ? <CheckSquare className="w-5 h-5 text-black" /> : <Square className="w-5 h-5" />}
                                   </button>
                                 </th>
-                                <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Накладна (Трек)</th>
-                                <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Товари</th>
+                                <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Товар</th>
+                                <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Платформа</th>
+                                <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Трек-номер</th>
+                                <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Ціна (¥)</th>
+                                <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">К-сть</th>
                                 <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Разом (¥)</th>
-                                <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Статус</th>
                                 <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Дії</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {Object.values<Purchase[]>(purchases.reduce((acc, p) => {
-                                const key = p.trackNumber || `no-track-${p.id}`;
-                                if (!acc[key]) acc[key] = [];
-                                acc[key].push(p);
-                                return acc;
-                              }, {} as Record<string, Purchase[]>))
-                                .filter(group => {
-                                  const matchesSearch = group.some(p => 
-                                    p.name.toLowerCase().includes(purchaseSearch.toLowerCase()) || 
-                                    p.trackNumber.toLowerCase().includes(purchaseSearch.toLowerCase())
-                                  );
-                                  const matchesStatus = statusFilter === 'all' || group.some(p => p.status === statusFilter);
-                                  const isEarlyStage = group.some(p => ['purchased', 'shipped_by_seller', 'arrived_china'].includes(p.status));
-                                  return matchesSearch && matchesStatus && isEarlyStage;
+                              {purchases
+                                .filter(p => {
+                                  const matchesSearch = (p.name || '').toLowerCase().includes(purchaseSearch.toLowerCase());
+                                  const isPurchased = p.status === 'purchased';
+                                  return matchesSearch && isPurchased;
                                 })
-                                .map((group) => {
-                                  const trackNumber = group[0].trackNumber;
-                                  const totalYuan = group.reduce((sum, p) => sum + (p.priceYuan * p.quantity), 0);
-                                  const totalUah = group.reduce((sum, p) => sum + (p.priceYuan * p.quantity * p.exchangeRate), 0);
-                                  const allIds = group.map(p => p.id);
-                                  const isAllSelected = allIds.every(id => selectedPurchaseIds.includes(id));
-                                  const isSomeSelected = allIds.some(id => selectedPurchaseIds.includes(id));
-                                  const mainStatus = group[0].status;
-                                  const hasMixedStatus = group.some(p => p.status !== mainStatus);
-
-                                  return (
-                                    <tr key={trackNumber || group[0].id} className={clsx(
-                                      "border-b border-gray-50 hover:bg-gray-50 transition-colors",
-                                      isSomeSelected && "bg-yellow-50/30"
-                                    )}>
-                                      <td className="py-4 px-4">
-                                        <button 
-                                          onClick={() => {
-                                            if (isAllSelected) {
-                                              setSelectedPurchaseIds(prev => prev.filter(id => !allIds.includes(id)));
-                                            } else {
-                                              setSelectedPurchaseIds(prev => [...new Set([...prev, ...allIds])]);
+                                .map((p) => (
+                                  <tr key={p.id} className={clsx(
+                                    "border-b border-gray-50 hover:bg-gray-50 transition-colors",
+                                    selectedPurchaseIds.includes(p.id) && "bg-yellow-50/30"
+                                  )}>
+                                    <td className="py-4 px-4">
+                                      <button 
+                                        onClick={() => toggleSelectOne(p.id)}
+                                        className="text-gray-400 hover:text-black transition-colors"
+                                      >
+                                        {selectedPurchaseIds.includes(p.id) ? <CheckSquare className="w-5 h-5 text-black" /> : <Square className="w-5 h-5" />}
+                                      </button>
+                                    </td>
+                                    <td className="py-4 px-4">
+                                      <div className="flex items-center gap-3">
+                                        <div className="w-10 h-10 rounded-xl bg-gray-50 overflow-hidden flex-shrink-0 border border-gray-100">
+                                          {p.photo ? <img src={p.photo} alt={p.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : <Package className="w-5 h-5 m-2.5 text-gray-300" />}
+                                        </div>
+                                        <div>
+                                          <p className="text-sm font-bold text-black">{p.name}</p>
+                                          {p.link && <a href={p.link} target="_blank" rel="noreferrer" className="text-[10px] text-blue-500 hover:underline">Посилання</a>}
+                                        </div>
+                                      </div>
+                                    </td>
+                                    <td className="py-4 px-4">
+                                      <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest bg-gray-100 px-2 py-0.5 rounded">
+                                        {p.platform}
+                                      </span>
+                                    </td>
+                                    <td className="py-4 px-4">
+                                      <div className="relative group/track min-w-[120px]">
+                                        <input 
+                                          type="text"
+                                          list="existing-tracks"
+                                          placeholder="Призначити..."
+                                          className="w-full bg-transparent border-b border-gray-100 hover:border-gray-300 focus:border-black focus:outline-none py-1 text-xs font-bold transition-colors"
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              const val = (e.target as HTMLInputElement).value;
+                                              if (val) handleAssignTrack([p.id], val);
                                             }
                                           }}
-                                          className="text-gray-400 hover:text-black transition-colors"
-                                        >
-                                          {isAllSelected ? <CheckSquare className="w-5 h-5 text-black" /> : isSomeSelected ? <MinusSquare className="w-5 h-5 text-black" /> : <Square className="w-5 h-5" />}
-                                        </button>
-                                      </td>
-                                      <td className="py-4 px-4">
-                                        <div className="flex items-center gap-2">
-                                          <button 
-                                            onClick={() => setSelectedTrackNumber(trackNumber)}
-                                            className="text-sm font-mono font-bold text-blue-500 hover:text-blue-700 transition-colors flex items-center gap-1 group"
-                                            title="Переглянути товари цього трек-номеру"
-                                          >
-                                            {trackNumber || 'Без трек-номеру'}
-                                            <Layers className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
-                                          </button>
-                                          {trackNumber && (
-                                            <button 
-                                              onClick={() => copyToClipboard(trackNumber)}
-                                              className="text-gray-400 hover:text-blue-500 transition-colors"
-                                              title="Скопіювати"
-                                            >
-                                              <Copy className="w-3 h-3" />
-                                            </button>
-                                          )}
-                                        </div>
-                                      </td>
-                                      <td className="py-4 px-4">
-                                        <div className="flex items-center gap-3">
-                                          <div className="flex -space-x-2">
-                                            {group.slice(0, 3).map((p, i) => (
-                                              <div key={i} className="w-8 h-8 rounded-full border-2 border-white bg-gray-100 overflow-hidden flex-shrink-0">
-                                                {p.photo ? <img src={p.photo} alt={p.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : <Package className="w-4 h-4 m-1.5 text-gray-300" />}
-                                              </div>
-                                            ))}
-                                            {group.length > 3 && (
-                                              <div className="w-8 h-8 rounded-full border-2 border-white bg-gray-50 flex items-center justify-center text-[10px] font-bold text-gray-500 flex-shrink-0">
-                                                +{group.length - 3}
-                                              </div>
-                                            )}
-                                          </div>
-                                          <div className="min-w-0">
-                                            <p className="text-sm font-bold text-black">{group.length} {group.length === 1 ? 'товар' : group.length > 1 && group.length < 5 ? 'товари' : 'товарів'}</p>
-                                            <p className="text-[10px] text-gray-400 font-medium truncate max-w-[200px]">
-                                              {group.map(p => p.name).join(', ')}
-                                            </p>
-                                          </div>
-                                        </div>
-                                      </td>
-                                      <td className="py-4 px-4">
-                                        <p className="text-sm font-black text-black">{totalYuan.toFixed(2)} ¥</p>
-                                        <p className="text-[10px] font-bold text-gray-400">{totalUah.toFixed(0)} грн</p>
-                                      </td>
-                                      <td className="py-4 px-4">
-                                        <select 
-                                          value={hasMixedStatus ? "" : mainStatus}
-                                          onChange={(e) => {
-                                            const newStatus = e.target.value as any;
-                                            if (!newStatus) return;
-                                            setPurchases(purchases.map(item => 
-                                              allIds.includes(item.id) ? { ...item, status: newStatus } : item
-                                            ));
-                                            addNotification(`Статус для ${allIds.length} товарів змінено на "${statusLabels[newStatus]}"`, 'success');
+                                          onBlur={(e) => {
+                                            const val = e.target.value;
+                                            if (val) handleAssignTrack([p.id], val);
                                           }}
-                                          className={clsx(
-                                            "text-[10px] font-black uppercase tracking-widest p-2 border border-gray-100 rounded-lg focus:outline-none focus:ring-1 focus:ring-black",
-                                            hasMixedStatus ? "bg-yellow-50 text-yellow-800" : "bg-gray-50 text-gray-600"
-                                          )}
-                                        >
-                                          {hasMixedStatus && <option value="" disabled>Різні статуси</option>}
-                                          {Object.entries(statusLabels).map(([val, label]) => (
-                                            <option key={val} value={val}>{label}</option>
+                                        />
+                                        <datalist id="existing-tracks">
+                                          {existingTrackNumbers.map(track => (
+                                            <option key={track} value={track} />
                                           ))}
-                                        </select>
-                                      </td>
-                                      <td className="py-4 px-4">
-                                        <div className="flex items-center gap-2">
-                                          <button 
-                                            onClick={() => setSelectedTrackNumber(trackNumber)}
-                                            className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl transition-colors"
-                                            title="Переглянути накладну"
-                                          >
-                                            <Layers className="w-4 h-4" />
-                                          </button>
-                                          <button 
-                                            onClick={() => {
-                                              setConfirmModal({
-                                                show: true,
-                                                title: 'Видалити накладну?',
-                                                message: 'Ви впевнені, що хочете видалити всі товари з цієї накладної?',
-                                                onConfirm: () => {
-                                                  setPurchases(purchases.filter(p => !allIds.includes(p.id)));
-                                                  setSelectedPurchaseIds(prev => prev.filter(id => !allIds.includes(id)));
-                                                  addNotification('Накладну видалено', 'error');
-                                                  setConfirmModal(null);
-                                                }
-                                              });
-                                            }}
-                                            className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"
-                                            title="Видалити накладну"
-                                          >
-                                            <Trash2 className="w-4 h-4" />
-                                          </button>
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  );
-                                })}
+                                        </datalist>
+                                      </div>
+                                    </td>
+                                    <td className="py-4 px-4 text-sm font-bold text-gray-600">{p.priceYuan} ¥</td>
+                                    <td className="py-4 px-4 text-sm font-bold text-gray-600">{p.quantity}</td>
+                                    <td className="py-4 px-4 text-sm font-black text-black">{(p.priceYuan * p.quantity).toFixed(2)} ¥</td>
+                                    <td className="py-4 px-4">
+                                      <div className="flex items-center gap-2">
+                                        <button 
+                                          onClick={() => handleEditPurchase(p)}
+                                          className="p-2 text-gray-400 hover:text-black hover:bg-gray-100 rounded-xl transition-colors"
+                                        >
+                                          <Edit2 className="w-4 h-4" />
+                                        </button>
+                                        <button 
+                                          onClick={() => handleDeletePurchase(p.id)}
+                                          className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))}
                             </tbody>
                           </table>
                         </div>
@@ -3154,7 +3147,7 @@ export default function App() {
                   ) : crmModule === 'china_warehouse' ? (
                     <div className="space-y-8">
                       <div className="flex justify-between items-center">
-                        <h2 className="text-2xl font-black text-black uppercase tracking-tight">Товари на складі Китай</h2>
+                        <h2 className="text-2xl font-black text-black uppercase tracking-tight">Накладні на складі Китай</h2>
                         <div className="flex gap-4">
                           <div className="relative">
                             <input 
@@ -3166,150 +3159,133 @@ export default function App() {
                             />
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                           </div>
+                          <button 
+                            onClick={() => {
+                              setCrmModule('purchases');
+                              addNotification('Виберіть товари в закупках для створення нової накладної', 'info');
+                            }}
+                            className="bg-black text-white px-6 py-3 rounded-xl font-black uppercase tracking-widest text-[10px] flex items-center gap-2 hover:bg-gray-900 transition-all shadow-lg shadow-gray-100"
+                          >
+                            <Plus className="w-4 h-4" />
+                            Додати накладну
+                          </button>
                         </div>
                       </div>
 
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left border-collapse">
-                          <thead>
-                            <tr className="border-b border-gray-100">
-                              <th className="py-4 px-4 text-left w-12">
-                                <button 
-                                  onClick={() => {
-                                    const filteredIds = purchases
-                                      .filter(p => p.status === 'at_china_warehouse' && (p.trackNumber.toLowerCase().includes(chinaWarehouseSearch.toLowerCase()) || p.name.toLowerCase().includes(chinaWarehouseSearch.toLowerCase())))
-                                      .map(p => p.id);
-                                    toggleSelectAll(filteredIds);
-                                  }}
-                                  className="text-gray-400 hover:text-black transition-colors"
-                                >
-                                  {selectedPurchaseIds.length > 0 ? <CheckSquare className="w-5 h-5 text-black" /> : <Square className="w-5 h-5" />}
-                                </button>
-                              </th>
-                              <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Трек номер</th>
-                              <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Назва товару</th>
-                              <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Платформа</th>
-                              <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Кількість</th>
-                              <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Статус</th>
-                              <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Вага (кг)</th>
-                              <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest">Дата прибуття</th>
-                              <th className="py-4 px-4 text-[10px] font-black text-gray-400 uppercase tracking-widest text-right">Дії</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {purchases
-                              .filter(p => p.status === 'at_china_warehouse' && (p.trackNumber.toLowerCase().includes(chinaWarehouseSearch.toLowerCase()) || p.name.toLowerCase().includes(chinaWarehouseSearch.toLowerCase())))
-                              .map((p) => (
-                                <tr key={p.id} className={clsx("border-b border-gray-50 hover:bg-gray-50 transition-colors", selectedPurchaseIds.includes(p.id) && "bg-yellow-50/30")}>
-                                  <td className="py-4 px-4">
-                                    <button 
-                                      onClick={() => toggleSelectOne(p.id)}
-                                      className="text-gray-400 hover:text-black transition-colors"
-                                    >
-                                      {selectedPurchaseIds.includes(p.id) ? <CheckSquare className="w-5 h-5 text-black" /> : <Square className="w-5 h-5" />}
-                                    </button>
-                                  </td>
-                                  <td className="py-4 px-4">
-                                    <div className="flex items-center gap-2">
+                      <div className="grid grid-cols-1 gap-6">
+                        {waybills.length > 0 ? (
+                          waybills.map((w: any) => (
+                            <div key={w.trackNumber} className="bg-white border border-gray-100 rounded-3xl p-8 shadow-sm hover:shadow-md transition-all group">
+                              <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
+                                <div className="space-y-2">
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center">
+                                      <Receipt className="w-6 h-6 text-amber-600" />
+                                    </div>
+                                    <div>
+                                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Трек-номер</p>
                                       <button 
-                                        onClick={() => setSelectedTrackNumber(p.trackNumber)}
-                                        className="text-xs font-mono font-black text-blue-600 bg-blue-50 px-2 py-1 rounded inline-flex items-center gap-2 hover:bg-blue-100 transition-all group/track"
-                                        title="Переглянути товари цього трек-номеру"
+                                        onClick={() => setSelectedTrackNumber(w.trackNumber)}
+                                        className="text-xl font-black text-black hover:text-blue-600 transition-colors flex items-center gap-2"
                                       >
-                                        {p.trackNumber || '—'}
-                                        <Layers className="w-3 h-3 opacity-0 group-hover/track:opacity-100 transition-opacity" />
-                                      </button>
-                                      <button 
-                                        onClick={() => copyToClipboard(p.trackNumber)}
-                                        className="text-gray-400 hover:text-blue-500 transition-colors"
-                                        title="Скопіювати"
-                                      >
-                                        <Layers className="w-3 h-3" />
+                                        {w.trackNumber}
+                                        <ExternalLink className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
                                       </button>
                                     </div>
-                                  </td>
-                                  <td className="py-4 px-4">
-                                    <p className="text-sm font-bold text-black">{p.name}</p>
-                                  </td>
-                                  <td className="py-4 px-4">
-                                    <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest bg-gray-100 px-3 py-1 rounded-full">
-                                      {p.platform}
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-8 flex-1 px-0 lg:px-12">
+                                  <div>
+                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Товари</p>
+                                    <p className="text-sm font-bold text-black">{w.items.length} поз. ({w.totalQuantity} шт)</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Вага</p>
+                                    <p className="text-sm font-bold text-black">{w.totalWeight.toFixed(2)} кг</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Вартість</p>
+                                    <p className="text-sm font-bold text-black">¥{w.totalCostYuan.toFixed(2)}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Статус</p>
+                                    <span className="text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg bg-amber-50 text-amber-600">
+                                      🏬 Склад Китай
                                     </span>
-                                  </td>
-                                  <td className="py-4 px-4 text-sm font-bold text-gray-600">
-                                    <input
-                                      type="number"
-                                      className="w-16 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-black focus:outline-none transition-colors"
-                                      defaultValue={p.quantity || 1}
-                                      onBlur={(e) => {
-                                        const val = parseInt(e.target.value, 10);
-                                        if (!isNaN(val) && val !== p.quantity && val > 0) {
-                                          setPurchases(purchases.map(item => item.id === p.id ? { ...item, quantity: val } : item));
-                                          addNotification(`Кількість оновлено`, 'success');
-                                        }
-                                      }}
-                                    />
-                                  </td>
-                                  <td className="py-4 px-4">
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg bg-amber-50 text-amber-600">
-                                        🏬 Склад Китай
-                                      </span>
-                                      <button 
-                                        onClick={() => {
-                                          setPurchases(purchases.map(item => item.id === p.id ? { ...item, status: 'shipped_to_ua' } : item));
-                                          addNotification(`Товар "${p.name}" відправлено в Україну`, 'success');
-                                        }}
-                                        className="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-indigo-100 transition-colors flex items-center gap-1"
-                                        title="Відправити в Україну"
-                                      >
-                                        <Truck className="w-3 h-3" />
-                                        В дорозі
-                                      </button>
+                                  </div>
+                                </div>
+
+                                <div className="flex gap-3">
+                                  <button 
+                                    onClick={() => {
+                                      const newTrack = prompt('Введіть новий трек-номер для цієї накладної:', w.trackNumber);
+                                      if (newTrack) handleEditWaybill(w.trackNumber, newTrack);
+                                    }}
+                                    className="p-3 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-xl transition-colors"
+                                    title="Редагувати трек-номер"
+                                  >
+                                    <Edit2 className="w-5 h-5" />
+                                  </button>
+                                  <button 
+                                    onClick={() => {
+                                      const ids = w.items.map((i: any) => i.id);
+                                      setPurchases(purchases.map(p => ids.includes(p.id) ? { ...p, status: 'shipped_to_ua' } : p));
+                                      addNotification(`Накладну ${w.trackNumber} відправлено в Україну`, 'success');
+                                    }}
+                                    className="bg-indigo-50 text-indigo-600 px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-indigo-100 transition-colors flex items-center gap-2"
+                                  >
+                                    <Truck className="w-4 h-4" />
+                                    Відправити
+                                  </button>
+                                  <button 
+                                    onClick={() => {
+                                      if (confirm(`Ви впевнені, що хочете видалити накладну ${w.trackNumber}? Всі товари в ній будуть видалені.`)) {
+                                        const ids = w.items.map((i: any) => i.id);
+                                        handleBulkDelete(ids);
+                                      }
+                                    }}
+                                    className="p-3 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"
+                                  >
+                                    <Trash2 className="w-5 h-5" />
+                                  </button>
+                                </div>
+                              </div>
+                              
+                              <div className="mt-6 pt-6 border-t border-gray-50 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                {w.items.slice(0, 3).map((item: any) => (
+                                  <div key={item.id} className="flex items-center gap-3 bg-gray-50/50 p-3 rounded-xl border border-gray-100/50">
+                                    <div className="w-10 h-10 rounded-lg bg-white overflow-hidden flex-shrink-0 border border-gray-100">
+                                      {item.photo ? <img src={item.photo} alt={item.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : <Package className="w-5 h-5 m-2.5 text-gray-300" />}
                                     </div>
-                                  </td>
-                                  <td className="py-4 px-4 text-sm font-bold text-black">
-                                    <div className="flex items-center gap-1 group">
-                                      <input
-                                        type="number"
-                                        className="w-16 bg-transparent border-b border-transparent group-hover:border-gray-300 focus:border-black focus:outline-none transition-colors text-right"
-                                        defaultValue={p.weight || ''}
-                                        onBlur={(e) => {
-                                          const val = parseFloat(e.target.value);
-                                          if (!isNaN(val) && val !== p.weight) {
-                                            setPurchases(purchases.map(item => item.id === p.id ? { ...item, weight: val } : item));
-                                            addNotification(`Вагу оновлено`, 'success');
-                                          }
-                                        }}
-                                      />
-                                      <span className="text-gray-400">{p.weightUnit || 'кг'}</span>
+                                    <div className="min-w-0">
+                                      <p className="text-xs font-bold text-black truncate">{item.name}</p>
+                                      <p className="text-[10px] font-black text-gray-400 uppercase">{item.quantity} шт • ¥{item.priceYuan}</p>
                                     </div>
-                                  </td>
-                                  <td className="py-4 px-4 text-xs font-bold text-gray-400">
-                                    {p.arrivalDate || '—'}
-                                  </td>
-                                  <td className="py-4 px-4 text-right">
-                                    <div className="flex justify-end gap-2">
-                                      <button 
-                                        onClick={() => handleEditPurchase(p)}
-                                        className="p-2 text-gray-400 hover:text-blue-500 transition-colors"
-                                        title="Редагувати"
-                                      >
-                                        <Edit2 className="w-4 h-4" />
-                                      </button>
-                                      <button 
-                                        onClick={() => handleDeletePurchase(p.id)}
-                                        className="p-2 text-gray-400 hover:text-red-500 transition-colors"
-                                        title="Видалити"
-                                      >
-                                        <Trash2 className="w-4 h-4" />
-                                      </button>
-                                    </div>
-                                  </td>
-                                </tr>
-                              ))}
-                          </tbody>
-                        </table>
+                                  </div>
+                                ))}
+                                {w.items.length > 3 && (
+                                  <button 
+                                    onClick={() => setSelectedTrackNumber(w.trackNumber)}
+                                    className="flex items-center justify-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest hover:text-black transition-colors"
+                                  >
+                                    Ще {w.items.length - 3} товарів...
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="bg-white border border-gray-100 rounded-3xl p-20 text-center">
+                            <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                              <Receipt className="w-10 h-10 text-gray-300" />
+                            </div>
+                            <h3 className="text-xl font-black text-gray-300 uppercase tracking-tight mb-2">Накладних немає</h3>
+                            <p className="text-gray-400 text-sm max-w-xs mx-auto">
+                              Тут з'являться товари, яким ви призначили трек-номер у розділі "Закупки".
+                            </p>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ) : crmModule === 'consolidation' ? (
@@ -3606,8 +3582,8 @@ export default function App() {
                             onClick={() => {
                               const filtered = purchases.filter(p => {
                                 const matchesStatus = p.status === 'arrived_ua';
-                                const matchesSearch = p.trackNumber.toLowerCase().includes(uaWarehouseSearch.toLowerCase()) || 
-                                                     p.name.toLowerCase().includes(uaWarehouseSearch.toLowerCase());
+                                const matchesSearch = (p.trackNumber || '').toLowerCase().includes(uaWarehouseSearch.toLowerCase()) || 
+                                                     (p.name || '').toLowerCase().includes(uaWarehouseSearch.toLowerCase());
                                 const matchesDate = !uaWarehouseDateFilter || (p.arrivalDate && p.arrivalDate.includes(uaWarehouseDateFilter));
                                 const matchesBatch = !uaWarehouseBatchFilter || p.batchId === uaWarehouseBatchFilter;
                                 return matchesStatus && matchesSearch && matchesDate && matchesBatch;
@@ -3628,8 +3604,8 @@ export default function App() {
                             onClick={() => {
                               const filtered = purchases.filter(p => {
                                 const matchesStatus = p.status === 'arrived_ua';
-                                const matchesSearch = p.trackNumber.toLowerCase().includes(uaWarehouseSearch.toLowerCase()) || 
-                                                     p.name.toLowerCase().includes(uaWarehouseSearch.toLowerCase());
+                                const matchesSearch = (p.trackNumber || '').toLowerCase().includes(uaWarehouseSearch.toLowerCase()) || 
+                                                     (p.name || '').toLowerCase().includes(uaWarehouseSearch.toLowerCase());
                                 const matchesDate = !uaWarehouseDateFilter || (p.arrivalDate && p.arrivalDate.includes(uaWarehouseDateFilter));
                                 const matchesBatch = !uaWarehouseBatchFilter || p.batchId === uaWarehouseBatchFilter;
                                 return matchesStatus && matchesSearch && matchesDate && matchesBatch;
@@ -3658,8 +3634,8 @@ export default function App() {
                                     const filteredIds = purchases
                                       .filter(p => {
                                         const matchesStatus = p.status === 'arrived_ua';
-                                        const matchesSearch = p.trackNumber.toLowerCase().includes(uaWarehouseSearch.toLowerCase()) || 
-                                                             p.name.toLowerCase().includes(uaWarehouseSearch.toLowerCase());
+                                        const matchesSearch = (p.trackNumber || '').toLowerCase().includes(uaWarehouseSearch.toLowerCase()) || 
+                                                             (p.name || '').toLowerCase().includes(uaWarehouseSearch.toLowerCase());
                                         const matchesDate = !uaWarehouseDateFilter || (p.arrivalDate && p.arrivalDate.includes(uaWarehouseDateFilter));
                                         const matchesBatch = !uaWarehouseBatchFilter || p.batchId === uaWarehouseBatchFilter;
                                         return matchesStatus && matchesSearch && matchesDate && matchesBatch;
@@ -3686,8 +3662,8 @@ export default function App() {
                             {purchases
                               .filter(p => {
                                 const matchesStatus = p.status === 'arrived_ua';
-                                const matchesSearch = p.trackNumber.toLowerCase().includes(uaWarehouseSearch.toLowerCase()) || 
-                                                     p.name.toLowerCase().includes(uaWarehouseSearch.toLowerCase());
+                                const matchesSearch = (p.trackNumber || '').toLowerCase().includes(uaWarehouseSearch.toLowerCase()) || 
+                                                     (p.name || '').toLowerCase().includes(uaWarehouseSearch.toLowerCase());
                                 const matchesDate = !uaWarehouseDateFilter || (p.arrivalDate && p.arrivalDate.includes(uaWarehouseDateFilter));
                                 const matchesBatch = !uaWarehouseBatchFilter || p.batchId === uaWarehouseBatchFilter;
                                 return matchesStatus && matchesSearch && matchesDate && matchesBatch;
@@ -4052,7 +4028,7 @@ export default function App() {
                             </thead>
                             <tbody>
                               {purchases
-                                .filter(p => p.status === 'my_warehouse' && (p.name.toLowerCase().includes(salesSearch.toLowerCase()) || p.trackNumber.toLowerCase().includes(salesSearch.toLowerCase())))
+                                .filter(p => p.status === 'my_warehouse' && ((p.name || '').toLowerCase().includes(salesSearch.toLowerCase()) || (p.trackNumber || '').toLowerCase().includes(salesSearch.toLowerCase())))
                                 .map((p) => {
                                   const costPrice = (p.priceYuan * p.quantity) / p.exchangeRate;
                                   const chinaDelivery = p.deliveryCostPerItem || 0;
@@ -4127,7 +4103,7 @@ export default function App() {
                               {purchases
                                 .filter(p => p.status === 'sold' && 
                                   (salesFilter === 'all' || p.saleDestination === salesFilter) &&
-                                  (p.name.toLowerCase().includes(salesSearch.toLowerCase()) || p.trackNumber.toLowerCase().includes(salesSearch.toLowerCase())))
+                                  ((p.name || '').toLowerCase().includes(salesSearch.toLowerCase()) || (p.trackNumber || '').toLowerCase().includes(salesSearch.toLowerCase())))
                                 .map((p) => {
                                   const costPrice = (p.priceYuan * p.quantity) * p.exchangeRate;
                                   const chinaDelivery = (p.deliveryCostPerItem || 0) * usdToUah;
@@ -4455,7 +4431,7 @@ export default function App() {
                               onClick={() => {
                                 const filtered = purchases.filter(p => {
                                   const matchesStatus = p.status === 'my_warehouse';
-                                  const matchesSearch = !priceListSearch || p.name.toLowerCase().includes(priceListSearch.toLowerCase()) || p.trackNumber.toLowerCase().includes(priceListSearch.toLowerCase());
+                                  const matchesSearch = !priceListSearch || (p.name || '').toLowerCase().includes(priceListSearch.toLowerCase()) || (p.trackNumber || '').toLowerCase().includes(priceListSearch.toLowerCase());
                                   const matchesDate = !priceListDateFilter || (p.arrivalDate && p.arrivalDate.includes(priceListDateFilter)) || (p.createdAt && p.createdAt.includes(priceListDateFilter));
                                   const matchesBatch = !priceListBatchFilter || p.batchId === priceListBatchFilter;
                                   return matchesStatus && matchesSearch && matchesDate && matchesBatch;
@@ -4471,7 +4447,7 @@ export default function App() {
                               onClick={() => {
                                 const filtered = purchases.filter(p => {
                                   const matchesStatus = p.status === 'my_warehouse';
-                                  const matchesSearch = !priceListSearch || p.name.toLowerCase().includes(priceListSearch.toLowerCase()) || p.trackNumber.toLowerCase().includes(priceListSearch.toLowerCase());
+                                  const matchesSearch = !priceListSearch || (p.name || '').toLowerCase().includes(priceListSearch.toLowerCase()) || (p.trackNumber || '').toLowerCase().includes(priceListSearch.toLowerCase());
                                   const matchesDate = !priceListDateFilter || (p.arrivalDate && p.arrivalDate.includes(priceListDateFilter)) || (p.createdAt && p.createdAt.includes(priceListDateFilter));
                                   const matchesBatch = !priceListBatchFilter || p.batchId === priceListBatchFilter;
                                   return matchesStatus && matchesSearch && matchesDate && matchesBatch;
@@ -4522,7 +4498,7 @@ export default function App() {
                           {purchases
                             .filter(p => {
                               const matchesStatus = p.status === 'my_warehouse';
-                              const matchesSearch = !priceListSearch || p.name.toLowerCase().includes(priceListSearch.toLowerCase()) || p.trackNumber.toLowerCase().includes(priceListSearch.toLowerCase());
+                              const matchesSearch = !priceListSearch || (p.name || '').toLowerCase().includes(priceListSearch.toLowerCase()) || (p.trackNumber || '').toLowerCase().includes(priceListSearch.toLowerCase());
                               const matchesDate = !priceListDateFilter || (p.arrivalDate && p.arrivalDate.includes(priceListDateFilter)) || (p.createdAt && p.createdAt.includes(priceListDateFilter));
                               const matchesBatch = !priceListBatchFilter || p.batchId === priceListBatchFilter;
                               return matchesStatus && matchesSearch && matchesDate && matchesBatch;
@@ -4760,7 +4736,7 @@ export default function App() {
                                       const filteredIds = purchases
                                         .filter(p => {
                                           const matchesStatus = p.status === 'my_warehouse';
-                                          const matchesSearch = !priceListSearch || p.name.toLowerCase().includes(priceListSearch.toLowerCase()) || p.trackNumber.toLowerCase().includes(priceListSearch.toLowerCase());
+                                          const matchesSearch = !priceListSearch || (p.name || '').toLowerCase().includes(priceListSearch.toLowerCase()) || (p.trackNumber || '').toLowerCase().includes(priceListSearch.toLowerCase());
                                           const matchesDate = !priceListDateFilter || (p.arrivalDate && p.arrivalDate.includes(priceListDateFilter)) || (p.createdAt && p.createdAt.includes(priceListDateFilter));
                                           const matchesBatch = !priceListBatchFilter || p.batchId === priceListBatchFilter;
                                           return matchesStatus && matchesSearch && matchesDate && matchesBatch;
@@ -4786,7 +4762,7 @@ export default function App() {
                               {purchases
                                 .filter(p => {
                                   const matchesStatus = p.status === 'my_warehouse';
-                                  const matchesSearch = !priceListSearch || p.name.toLowerCase().includes(priceListSearch.toLowerCase()) || p.trackNumber.toLowerCase().includes(priceListSearch.toLowerCase());
+                                  const matchesSearch = !priceListSearch || (p.name || '').toLowerCase().includes(priceListSearch.toLowerCase()) || (p.trackNumber || '').toLowerCase().includes(priceListSearch.toLowerCase());
                                   const matchesDate = !priceListDateFilter || (p.arrivalDate && p.arrivalDate.includes(priceListDateFilter)) || (p.createdAt && p.createdAt.includes(priceListDateFilter));
                                   const matchesBatch = !priceListBatchFilter || p.batchId === priceListBatchFilter;
                                   return matchesStatus && matchesSearch && matchesDate && matchesBatch;
@@ -5413,7 +5389,11 @@ export default function App() {
                       isInsured: false,
                       declaredValue: 0,
                       shippingCost: 0,
-                      status: 'shipped_by_seller'
+                      status: 'shipped_by_seller',
+                      brand: '',
+                      radius: '',
+                      season: '',
+                      article: ''
                     });
                     setShowAddPurchaseModal(true);
                   }
@@ -5463,7 +5443,26 @@ export default function App() {
                 quantity: 1,
                 trackNumber: '',
                 photo: '',
-                comment: ''
+                comment: '',
+                size: '',
+                width: 0,
+                height: 0,
+                length: 0,
+                dimUnit: 'cm',
+                weight: 0,
+                weightUnit: 'kg',
+                volume: 0,
+                density: 0,
+                isFabric: false,
+                isPressed: false,
+                isInsured: false,
+                declaredValue: 0,
+                shippingCost: 0,
+                status: 'purchased',
+                brand: '',
+                radius: '',
+                season: '',
+                article: ''
               });
             }} className="absolute top-4 right-4 md:top-6 md:right-6 text-gray-400 hover:text-black transition-colors">
               <X className="w-5 h-5 md:w-6 md:h-6" />
@@ -5999,6 +5998,79 @@ export default function App() {
                 💾 Зберегти і додати ще
               </button>
             </div>
+          </motion.div>
+        </div>
+      )}
+
+      {showAssignTrackModal && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center px-4 sm:px-6">
+          <div className="absolute inset-0 bg-black/90 backdrop-blur-sm" onClick={() => setShowAssignTrackModal(false)} />
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-white rounded-3xl p-6 md:p-10 max-w-xl w-full relative z-10 shadow-2xl border-b-8 border-black max-h-[90vh] overflow-y-auto"
+          >
+            <button onClick={() => setShowAssignTrackModal(false)} className="absolute top-4 right-4 md:top-6 md:right-6 text-gray-400 hover:text-black transition-colors">
+              <X className="w-5 h-5 md:w-6 md:h-6" />
+            </button>
+            <h3 className="text-xl md:text-3xl font-black text-black uppercase tracking-tight mb-6 md:mb-8 flex items-center gap-2 md:gap-3">
+              <Layers className="w-6 h-6 md:w-8 md:h-8 text-black" />
+              Призначити накладну
+            </h3>
+            <div className="space-y-6">
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Трек-номер (Накладна)</label>
+                <div className="relative">
+                  <input 
+                    type="text" 
+                    list="existing-tracks-modal"
+                    value={assignTrackNumber}
+                    onChange={(e) => setAssignTrackNumber(e.target.value)}
+                    placeholder="Введіть або вставте трек-номер..."
+                    className="w-full p-4 bg-gray-50 rounded-xl border border-gray-100 font-bold focus:outline-none focus:ring-2 focus:ring-black"
+                  />
+                  <datalist id="existing-tracks-modal">
+                    {existingTrackNumbers.map(track => (
+                      <option key={track} value={track} />
+                    ))}
+                  </datalist>
+                  {existingTrackNumbers.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {existingTrackNumbers.slice(0, 5).map(track => (
+                        <button
+                          key={track}
+                          onClick={() => setAssignTrackNumber(track)}
+                          className="text-[10px] font-black bg-gray-100 text-gray-600 px-3 py-1.5 rounded-lg hover:bg-gray-200 transition-colors"
+                        >
+                          {track}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+              
+              <div className="bg-gray-50 p-6 rounded-2xl border border-gray-100">
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">Вибрані товари ({selectedPurchaseIds.length})</p>
+                <div className="space-y-2 max-h-[200px] overflow-y-auto pr-2">
+                  {purchases.filter(p => selectedPurchaseIds.includes(p.id)).map(p => (
+                    <div key={p.id} className="flex items-center gap-3 bg-white p-3 rounded-xl border border-gray-100">
+                      <div className="w-8 h-8 rounded-lg bg-gray-50 overflow-hidden flex-shrink-0">
+                        {p.photo ? <img src={p.photo} alt={p.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : <Package className="w-4 h-4 m-2 text-gray-300" />}
+                      </div>
+                      <p className="text-xs font-bold text-black truncate flex-1">{p.name}</p>
+                      <p className="text-[10px] font-black text-gray-400">{p.quantity} шт</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <button 
+              onClick={() => handleAssignTrack(selectedPurchaseIds, assignTrackNumber)}
+              className="w-full mt-10 py-5 bg-black text-white rounded-xl font-black text-xl hover:bg-gray-900 transition-all shadow-lg shadow-gray-100"
+            >
+              Призначити та перенести на склад
+            </button>
           </motion.div>
         </div>
       )}
