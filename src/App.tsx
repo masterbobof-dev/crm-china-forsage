@@ -819,6 +819,8 @@ export default function App() {
   const [selectedWaybillTracks, setSelectedWaybillTracks] = useState<string[]>([]);
 
   const [showImportWaybillModal, setShowImportWaybillModal] = useState(false);
+  const [showCreateWaybillModal, setShowCreateWaybillModal] = useState(false);
+  const [newWaybillForm, setNewWaybillForm] = useState({ trackNumber: '', weight: 0, volume: 0, density: 0 });
   const [waybillImportText, setWaybillImportText] = useState('');
 
   const parseWaybillText = (text: string) => {
@@ -3366,10 +3368,7 @@ export default function App() {
                               Імпорт накладних
                             </button>
                             <button 
-                              onClick={() => {
-                                setCrmModule('purchases');
-                                addNotification('Виберіть товари в закупках для створення нової накладної', 'info');
-                              }}
+                              onClick={() => setShowCreateWaybillModal(true)}
                               className="bg-black text-white px-6 py-3 rounded-xl font-black uppercase tracking-widest text-[10px] flex items-center gap-2 hover:bg-gray-900 transition-all shadow-lg shadow-gray-100"
                             >
                               <Plus className="w-4 h-4" />
@@ -7498,6 +7497,124 @@ export default function App() {
           }}
           onCancel={() => setConfirmModal(null)}
         />
+      )}
+
+      {showCreateWaybillModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            className="bg-white rounded-[40px] w-full max-w-2xl overflow-hidden shadow-2xl"
+          >
+            <div className="p-10 border-b border-gray-50 flex justify-between items-center bg-black text-white">
+              <div>
+                <h2 className="text-3xl font-black uppercase tracking-tight">Створити нову накладну</h2>
+                <p className="text-gray-400 text-sm font-bold mt-1 uppercase tracking-widest">Введіть дані для нової накладної</p>
+              </div>
+              <button 
+                onClick={() => setShowCreateWaybillModal(false)}
+                className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center hover:bg-white/20 transition-all"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            
+            <div className="p-10 space-y-8">
+              <div className="space-y-4">
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block ml-1">Трек-номер</label>
+                <input 
+                  type="text"
+                  value={newWaybillForm.trackNumber}
+                  onChange={(e) => setNewWaybillForm({...newWaybillForm, trackNumber: e.target.value})}
+                  placeholder="Введіть трек-номер..."
+                  className="w-full bg-gray-50 border border-gray-100 rounded-3xl p-6 text-sm font-bold outline-none focus:ring-4 focus:ring-black/5 transition-all"
+                />
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-4">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block ml-1">Вага (кг)</label>
+                  <input 
+                    type="number"
+                    value={newWaybillForm.weight}
+                    onChange={(e) => setNewWaybillForm({...newWaybillForm, weight: parseFloat(e.target.value) || 0})}
+                    placeholder="0.0"
+                    className="w-full bg-gray-50 border border-gray-100 rounded-3xl p-6 text-sm font-bold outline-none focus:ring-4 focus:ring-black/5 transition-all"
+                  />
+                </div>
+                <div className="space-y-4">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block ml-1">Об'єм (м³)</label>
+                  <input 
+                    type="number"
+                    value={newWaybillForm.volume}
+                    onChange={(e) => setNewWaybillForm({...newWaybillForm, volume: parseFloat(e.target.value) || 0})}
+                    placeholder="0.0"
+                    className="w-full bg-gray-50 border border-gray-100 rounded-3xl p-6 text-sm font-bold outline-none focus:ring-4 focus:ring-black/5 transition-all"
+                  />
+                </div>
+                <div className="space-y-4">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest block ml-1">Щільність</label>
+                  <input 
+                    type="number"
+                    value={newWaybillForm.density}
+                    onChange={(e) => setNewWaybillForm({...newWaybillForm, density: parseFloat(e.target.value) || 0})}
+                    placeholder="0.0"
+                    className="w-full bg-gray-50 border border-gray-100 rounded-3xl p-6 text-sm font-bold outline-none focus:ring-4 focus:ring-black/5 transition-all"
+                  />
+                </div>
+              </div>
+
+              <button 
+                onClick={() => {
+                  if (!newWaybillForm.trackNumber.trim()) {
+                    addNotification('Введіть трек-номер', 'error');
+                    return;
+                  }
+                  
+                  // Update the status of selected purchases to 'at_china_warehouse'
+                  const updatedPurchases = purchases.map(p => 
+                    p.trackNumber === newWaybillForm.trackNumber ? { ...p, status: 'at_china_warehouse' } : p
+                  );
+                  // If the purchase doesn't exist, we might need to add it, 
+                  // but for now, let's assume we are updating existing ones or adding a new one.
+                  // Given the current structure, let's just add a new purchase entry if needed.
+                  
+                  // For now, let's just update the local state to reflect the new waybill
+                  // Since waybills are derived from purchases, updating purchases is the correct way.
+                  // However, if we need to add a new waybill, we should add a new purchase.
+                  
+                  // Let's add a new purchase entry for the waybill
+                  const newPurchase = {
+                    id: Date.now().toString(),
+                    platform: 'Manual',
+                    name: `Накладна ${newWaybillForm.trackNumber}`,
+                    link: '',
+                    priceYuan: 0,
+                    exchangeRate: 1,
+                    quantity: 1,
+                    trackNumber: newWaybillForm.trackNumber,
+                    photo: '',
+                    comment: '',
+                    status: 'at_china_warehouse',
+                    weight: newWaybillForm.weight,
+                    volume: newWaybillForm.volume,
+                    density: newWaybillForm.density
+                  };
+                  
+                  setPurchases([...purchases, newPurchase]);
+                  
+                  setNewWaybillForm({ trackNumber: '', weight: 0, volume: 0, density: 0 });
+                  setShowCreateWaybillModal(false);
+                  addNotification('Накладна успішно створена', 'success');
+                }}
+                className="w-full py-6 bg-black text-white rounded-2xl font-black text-xl uppercase tracking-widest hover:bg-gray-900 transition-all shadow-xl shadow-gray-100 flex items-center justify-center gap-3"
+              >
+                <PlusCircle className="w-6 h-6" />
+                Створити накладну
+              </button>
+            </div>
+          </motion.div>
+        </div>
       )}
 
       {showImportWaybillModal && (
