@@ -259,7 +259,6 @@ export interface Purchase {
   barcode?: string;
   arrivalDate?: string;
   batchId?: string;
-  localDeliveryId?: string;
   deliveryCostPerItem?: number; // This is "Доставка Китай"
   ukraineDeliveryCost?: number; // This is "Доставка Україна" (local logistics)
   novaPoshtaCost?: number;      // This is "Доставка Нова Пошта"
@@ -884,7 +883,9 @@ export default function App() {
   };
 
   const handleImportWaybills = () => {
+    console.log('[App] handleImportWaybills called');
     const imported = parseWaybillText(waybillImportText);
+    console.log('[App] imported data:', imported);
     if (imported.length === 0) {
       addNotification('Не вдалося розпізнати дані. Перевірте формат тексту.', 'error');
       return;
@@ -914,7 +915,7 @@ export default function App() {
         };
       }
       
-      if (p.isWaybillHeader) {
+      if (p.isWaybillHeader || p.platform === 'Waybill') {
         acc[track].totalWeight = p.weight || 0;
         acc[track].totalDeliveryCost = p.shippingCost || 0;
         acc[track].arrivalDate = p.arrivalDate || '';
@@ -3407,8 +3408,24 @@ export default function App() {
                                       }}
                                       className="w-4 h-4 rounded border-gray-300 text-black focus:ring-black cursor-pointer"
                                     />
-                                    <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center flex-shrink-0">
-                                      <Receipt className="w-5 h-5 text-amber-600" />
+                                    <div className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 overflow-hidden bg-gray-50 border border-gray-100 relative">
+                                      {w.items.slice(0, 4).length > 0 ? (
+                                        <div className={cn("grid w-full h-full", w.items.slice(0, 4).length > 1 ? "grid-cols-2" : "grid-cols-1")}>
+                                          {w.items.slice(0, 4).map((item: any, idx: number) => (
+                                            <div key={idx} className="w-full h-full overflow-hidden">
+                                              {item.photo ? (
+                                                <img src={item.photo} alt={item.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                                              ) : (
+                                                <div className="w-full h-full bg-gray-100 flex items-center justify-center">
+                                                  <Package className="w-3 h-3 text-gray-300" />
+                                                </div>
+                                              )}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      ) : (
+                                        <Receipt className="w-5 h-5 text-amber-600" />
+                                      )}
                                     </div>
                                   </div>
 
@@ -3435,15 +3452,15 @@ export default function App() {
                                     </div>
                                     <div className="min-w-0">
                                       <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-0.5">Вага</p>
-                                      <p className="text-xs font-bold text-black truncate">{w.totalWeight.toFixed(2)} кг</p>
+                                      <p className="text-xs font-bold text-black truncate">{(w.totalWeight || 0).toFixed(2)} кг</p>
                                     </div>
                                     <div className="min-w-0">
                                       <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-0.5">Вартість</p>
-                                      <p className="text-xs font-bold text-black truncate">₴{(w.totalCostYuan * cnyToUah).toFixed(0)}</p>
+                                      <p className="text-xs font-bold text-black truncate">₴{Math.round((w.totalCostYuan || 0) * cnyToUah)}</p>
                                     </div>
                                     <div className="min-w-0">
                                       <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-0.5">Доставка</p>
-                                      <p className="text-xs font-bold text-indigo-600 truncate">₴{(w.totalDeliveryCost * usdToUah).toFixed(0)}</p>
+                                      <p className="text-xs font-bold text-indigo-600 truncate">₴{Math.round((w.totalDeliveryCost || 0) * usdToUah)}</p>
                                     </div>
                                     <div className={cn("min-w-0", waybillViewMode === 'grid' && "col-span-2 mt-2")}>
                                       <p className="text-[8px] font-black text-gray-400 uppercase tracking-widest mb-1">Статус</p>
@@ -3549,7 +3566,14 @@ export default function App() {
                             <div className="w-8 h-8 bg-white/10 rounded-xl flex items-center justify-center font-black text-sm">
                               {selectedWaybillTracks.length}
                             </div>
-                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Вибрано накладних</p>
+                            <div className="flex flex-col">
+                              <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Вибрано накладних</p>
+                              <p className="text-[10px] font-black uppercase tracking-widest text-red-400">
+                                Доставка: ₴{Math.round(waybills
+                                  .filter((w: any) => selectedWaybillTracks.includes(w.trackNumber))
+                                  .reduce((sum: number, w: any) => sum + (w.totalDeliveryCost * usdToUah), 0))}
+                              </p>
+                            </div>
                           </div>
                           
                           <div className="flex items-center gap-4">
@@ -5563,7 +5587,7 @@ export default function App() {
                 <button 
                   onClick={() => {
                     const trackPurchases = purchases.filter(p => p.trackNumber === selectedTrackNumber);
-                    const productItems = trackPurchases.filter(p => !p.isWaybillHeader);
+                    const productItems = trackPurchases.filter(p => !(p.isWaybillHeader || p.platform === 'Waybill'));
                     const itemsToExport = productItems.length > 0 ? productItems : trackPurchases;
                     exportToExcelWithPhotos(itemsToExport, `Track_${selectedTrackNumber}`);
                   }}
@@ -5606,7 +5630,7 @@ export default function App() {
               <div className={cn(isExportingPDF ? "space-y-6" : "space-y-4 print:space-y-6")}>
                 {(() => {
                   const trackPurchases = purchases.filter(p => p.trackNumber === selectedTrackNumber);
-                  const productItems = trackPurchases.filter(p => !p.isWaybillHeader);
+                  const productItems = trackPurchases.filter(p => !(p.isWaybillHeader || p.platform === 'Waybill'));
                   const itemsToDisplay = productItems.length > 0 ? productItems : trackPurchases;
                   
                   let totalDeliveryForGroup = 0;

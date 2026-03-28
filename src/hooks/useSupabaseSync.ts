@@ -41,8 +41,13 @@ export function useSupabaseSync<T extends { id: string }>(tableName: string, ini
 
   const fetchData = async () => {
     try {
+      console.log(`Fetching data from ${tableName}...`);
       const { data: fetchedData, error } = await supabase.from(tableName).select('*');
-      if (error) throw error;
+      if (error) {
+        console.error(`Supabase fetch error for ${tableName}:`, error);
+        throw error;
+      }
+      console.log(`Fetched ${fetchedData?.length || 0} items from ${tableName}`);
       if (fetchedData && fetchedData.length > 0) {
         setData(toCamelCase(fetchedData));
       }
@@ -54,6 +59,7 @@ export function useSupabaseSync<T extends { id: string }>(tableName: string, ini
   };
 
   const syncData = useCallback((newDataOrUpdater: T[] | ((prev: T[]) => T[])) => {
+    console.log(`[SupabaseSync] syncData called for ${tableName}`);
     setData(prev => {
       const newData = typeof newDataOrUpdater === 'function' ? (newDataOrUpdater as any)(prev) : newDataOrUpdater;
       
@@ -64,13 +70,29 @@ export function useSupabaseSync<T extends { id: string }>(tableName: string, ini
       Promise.resolve().then(async () => {
         try {
           if (deletedIds.length > 0) {
+            console.log(`Deleting ${deletedIds.length} items from ${tableName}...`);
             const { error: deleteError } = await supabase.from(tableName).delete().in('id', deletedIds);
-            if (deleteError) throw deleteError;
+            if (deleteError) {
+              console.error(`Supabase delete error for ${tableName}:`, deleteError);
+              throw deleteError;
+            }
           }
           if (newData.length > 0) {
-            const snakeCaseData = toSnakeCase(newData);
-            const { error: upsertError } = await supabase.from(tableName).upsert(snakeCaseData);
-            if (upsertError) throw upsertError;
+            console.log(`Upserting ${newData.length} items to ${tableName}...`);
+            try {
+              const snakeCaseData = toSnakeCase(newData);
+              console.log(`[SupabaseSync] snakeCaseData generated for ${tableName}`);
+              const { error: upsertError } = await supabase.from(tableName).upsert(snakeCaseData);
+              if (upsertError) {
+                console.error(`Supabase upsert error for ${tableName}:`, upsertError);
+                throw upsertError;
+              }
+              console.log(`Successfully synced ${tableName}`);
+            } catch (e) {
+              console.error(`[SupabaseSync] Error during upsert for ${tableName}:`, e);
+              console.dir(e);
+              throw e;
+            }
           }
         } catch (error) {
           console.error(`Error syncing ${tableName}:`, error);
