@@ -4058,11 +4058,11 @@ export default function App() {
                                     {(p.priceYuan * p.exchangeRate * p.quantity).toFixed(0)} грн
                                   </td>
                                   <td className="py-4 px-4 text-sm font-bold text-amber-600">
-                                    {((p.deliveryCostPerItem || 0) * usdToUah + (p.shippingCost || 0) * usdToUah).toFixed(0)} грн
+                                    {((p.deliveryCostPerItem || 0) * usdToUah + (p.shippingCost || 0) * usdToUah + (p.ukraineDeliveryCost || 0)).toFixed(0)} грн
                                   </td>
                                   <td className="py-4 px-4">
                                     <p className="text-sm font-black text-black">
-                                      {(p.priceYuan * p.exchangeRate * p.quantity + (p.deliveryCostPerItem || 0) * usdToUah + (p.shippingCost || 0) * usdToUah).toFixed(0)} грн
+                                      {(p.priceYuan * p.exchangeRate * p.quantity + (p.deliveryCostPerItem || 0) * usdToUah + (p.shippingCost || 0) * usdToUah + (p.ukraineDeliveryCost || 0)).toFixed(0)} грн
                                     </p>
                                   </td>
                                   <td className="py-4 px-4">
